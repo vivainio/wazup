@@ -14,6 +14,15 @@ _LOG_LINE_RE = re.compile(r"^[^\t]*\t[^\t]*\t\S+Z\s?")
 _REMOTE_OWNER_RE = re.compile(r"github\.com[:/]([^/]+)/")
 
 
+def is_orphaned_worktree_branch_name(name: str) -> bool:
+    """True for a `worktree/`-prefixed branch name (herdr's convention for
+    throwaway worktree branches). Only meaningful for branches that aren't
+    currently checked out in a live worktree (those are handled separately)
+    — a match here means the worktree was removed but the branch it
+    generated was left behind."""
+    return name.startswith("worktree/")
+
+
 class WazupError(Exception):
     """Raised when a required CLI is missing or a command fails."""
 
@@ -147,7 +156,8 @@ class BranchInfo:
     relative_date: str
 
 
-def recent_local_branches(limit: int = 8, exclude: set[str] | None = None) -> list[BranchInfo]:
+def local_branches_by_recency(exclude: set[str] | None = None) -> list[BranchInfo]:
+    """All local branches, most recently committed to first."""
     exclude = exclude or set()
     try:
         data = _run(
@@ -157,7 +167,6 @@ def recent_local_branches(limit: int = 8, exclude: set[str] | None = None) -> li
                 "refs/heads/",
                 "--sort=-committerdate",
                 "--format=%(refname:short)\t%(committerdate:relative)",
-                f"--count={limit + len(exclude) + 1}",
             ]
         )
     except WazupError:
@@ -168,7 +177,7 @@ def recent_local_branches(limit: int = 8, exclude: set[str] | None = None) -> li
         name, _, relative_date = line.partition("\t")
         if name and name not in exclude:
             branches.append(BranchInfo(name=name, relative_date=relative_date))
-    return branches[:limit]
+    return branches
 
 
 def worktree_branches() -> dict[str, str]:

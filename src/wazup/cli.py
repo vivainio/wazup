@@ -92,7 +92,8 @@ def _pr_suffix(prs: dict[str, gh.BranchPr], branch: str) -> str:
 
 def _print_recent_branches(current_branch: str) -> None:
     worktrees = gh.worktree_branches()
-    branches = gh.recent_local_branches(limit=8, exclude={current_branch, *worktrees})
+    all_branches = gh.local_branches_by_recency(exclude={current_branch, *worktrees})
+    branches = [b for b in all_branches if not gh.is_orphaned_worktree_branch_name(b.name)][:8]
     prs = gh.open_prs_by_branch()
 
     if branches:
