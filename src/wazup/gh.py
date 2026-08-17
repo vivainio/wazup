@@ -10,7 +10,7 @@ import subprocess
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 
 _RUN_JOB_URL_RE = re.compile(r"/actions/runs/(\d+)/job/(\d+)")
@@ -468,6 +468,7 @@ class WorkflowRun:
     status: str
     conclusion: str | None
     url: str
+    created_at: str | None = None
 
 
 def latest_runs_for_branch(branch: str, limit: int = 5) -> list[WorkflowRun]:
@@ -496,13 +497,34 @@ def latest_runs_for_branch(branch: str, limit: int = 5) -> list[WorkflowRun]:
 
 
 _RUNNING_STATUSES = {"queued", "in_progress", "waiting", "pending", "requested"}
+_RECENT_OTHER_RUN_WINDOW_SECONDS = 60 * 60
 
 
-def active_runs(limit: int = 20) -> list[WorkflowRun]:
-    """Currently running/queued workflow runs anywhere in the repo, not
-    scoped to a branch — a release-triggered run's headBranch is the tag,
-    not the branch whose push triggered CI, so `--branch` filtering misses
-    it entirely."""
+def _parse_utc_iso(ts: str | None) -> datetime | None:
+    if not ts:
+        return None
+    try:
+        return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def run_age_minutes(created_at: str | None) -> int | None:
+    """Minutes since a workflow run started — used to show "Nm ago" instead
+    of a redundant link on a run that already succeeded."""
+    created = _parse_utc_iso(created_at)
+    if created is None:
+        return None
+    return int((datetime.now(timezone.utc) - created).total_seconds() // 60)
+
+
+def recent_other_runs(limit: int = 20) -> list[WorkflowRun]:
+    """Workflow runs anywhere in the repo that are still active, or
+    completed within the last hour — not scoped to a branch, since a
+    release-triggered run's headBranch is the tag, not the branch whose
+    push triggered the CI run above, so `--branch` filtering misses it
+    entirely. The recency window keeps this from resurfacing every
+    completed run in the repo's history on every invocation."""
     data = _run_json(
         [
             "gh",
@@ -511,19 +533,26 @@ def active_runs(limit: int = 20) -> list[WorkflowRun]:
             "--limit",
             str(limit),
             "--json",
-            "name,status,conclusion,url",
+            "name,status,conclusion,url,createdAt",
         ]
     )
-    return [
-        WorkflowRun(
-            name=r["name"],
-            status=r["status"],
-            conclusion=r.get("conclusion"),
-            url=r["url"],
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=_RECENT_OTHER_RUN_WINDOW_SECONDS)
+    runs = []
+    for r in data:
+        if (r.get("status") or "").lower() not in _RUNNING_STATUSES:
+            created_at = _parse_utc_iso(r.get("createdAt"))
+            if created_at is None or created_at < cutoff:
+                continue
+        runs.append(
+            WorkflowRun(
+                name=r["name"],
+                status=r["status"],
+                conclusion=r.get("conclusion"),
+                url=r["url"],
+                created_at=r.get("createdAt"),
+            )
         )
-        for r in data
-        if (r.get("status") or "").lower() in _RUNNING_STATUSES
-    ]
+    return runs
 
 
 @dataclass

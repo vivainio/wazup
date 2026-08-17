@@ -100,35 +100,51 @@ def _print_why_hint(cmd: str) -> None:
 def _print_checks(checks: list[gh.CheckRun], cmd: str, why: bool = False) -> None:
     if not checks:
         print("ci     no checks reported")
-        return
-    print("ci")
-    failed = [c for c in checks if _is_failed(c)]
-    info = iter(_fetch_failure_info(failed, why))
+    else:
+        print("ci")
+        failed = [c for c in checks if _is_failed(c)]
+        info = iter(_fetch_failure_info(failed, why))
 
-    for c in checks:
-        print(f"       {_check_icon(c.conclusion, c.status)} {c.name}")
-        if _is_failed(c):
-            summary, tail = next(info)
-            if summary:
-                print(f"         {_dim(summary)}")
-            if why:
-                _print_failure_detail(c, tail)
-    if failed and not why:
-        _print_why_hint(cmd)
+        for c in checks:
+            print(f"       {_check_icon(c.conclusion, c.status)} {c.name}")
+            if _is_failed(c):
+                summary, tail = next(info)
+                if summary:
+                    print(f"         {_dim(summary)}")
+                if why:
+                    _print_failure_detail(c, tail)
+        if failed and not why:
+            _print_why_hint(cmd)
+    _print_recent_other_runs(
+        exclude_names={c.name for c in checks},
+        exclude_urls={c.details_url for c in checks},
+    )
 
 
-def _print_extra_active_runs(exclude_urls: set[str | None]) -> None:
-    """Runs elsewhere in the repo that are currently running/queued and
-    weren't already shown — e.g. a release-triggered publish workflow,
-    invisible to the branch-scoped CI lookup above."""
+def _print_recent_other_runs(exclude_names: set[str], exclude_urls: set[str | None]) -> None:
+    """Other workflows' runs elsewhere in the repo — still active, or
+    completed within the last hour — that weren't already shown above.
+    E.g. a release-triggered publish workflow, invisible to the
+    branch-scoped CI lookup since it isn't scoped to this branch. Only the
+    most recent run per workflow name is shown."""
     try:
-        active = gh.active_runs()
+        runs = gh.recent_other_runs()
     except gh.WazupError:
         return
-    for r in active:
-        if r.url in exclude_urls:
+    seen: set[str] = set()
+    for r in runs:
+        if r.name in exclude_names or r.url in exclude_urls or r.name in seen:
             continue
-        print(f"       {_check_icon(r.conclusion, r.status)} {r.name}  {r.url}")
+        seen.add(r.name)
+        icon = _check_icon(r.conclusion, r.status)
+        success = (r.conclusion or "").upper() == "SUCCESS" or (r.status or "").upper() == "SUCCESS"
+        if success:
+            # a clean pass needs no link — same reasoning as _print_ci_fallback
+            age = gh.run_age_minutes(r.created_at)
+            suffix = f"  {_dim(f'{age}m ago')}" if age is not None else ""
+            print(f"       {icon} {r.name}{suffix}")
+        else:
+            print(f"       {icon} {r.name}  {r.url}")
 
 
 def _print_ci_fallback(branch: str, why: bool, cmd: str) -> tuple[bool, bool]:
@@ -158,7 +174,7 @@ def _print_ci_fallback(branch: str, why: bool, cmd: str) -> tuple[bool, bool]:
         if earlier_failures:
             note = f"fixed — {earlier_failures} of the last {len(checks)} runs had failed"
             print(f"         {_dim(note)}")
-        _print_extra_active_runs(exclude_urls={latest.details_url})
+        _print_recent_other_runs(exclude_names={latest.name}, exclude_urls={latest.details_url})
         return True, _is_success(latest)
 
     summary, tail = _fetch_failure_info([latest], why)[0]
@@ -170,7 +186,7 @@ def _print_ci_fallback(branch: str, why: bool, cmd: str) -> tuple[bool, bool]:
         print(f"         {_dim(f'{earlier_failures + 1} of the last {len(checks)} runs failed')}")
     if not why:
         _print_why_hint(cmd)
-    _print_extra_active_runs(exclude_urls={latest.details_url})
+    _print_recent_other_runs(exclude_names={latest.name}, exclude_urls={latest.details_url})
     return True, False
 
 
