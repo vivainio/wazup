@@ -121,7 +121,17 @@ def _pr_suffix(prs: dict[str, gh.BranchPr], branch: str) -> str:
     return f"  {_green(f'PR #{pr.number}{draft}')}"
 
 
+def _unmerged_note(unmerged: int | None) -> str:
+    if unmerged is None:
+        return ""
+    if unmerged == 0:
+        return f"  {_dim('merged')}"
+    return f"  {_yellow(f'{unmerged} unmerged')}"
+
+
 def _print_recent_branches(current_branch: str) -> None:
+    # called only when current_branch is the repo's default branch, so it
+    # doubles as the ref worktrees are checked for unmerged commits against
     worktrees = gh.worktree_branches()
     all_branches = gh.local_branches_by_recency(exclude={current_branch, *worktrees})
     branches = [b for b in all_branches if not gh.is_orphaned_worktree_branch_name(b.name)][:8]
@@ -132,12 +142,17 @@ def _print_recent_branches(current_branch: str) -> None:
         for b in branches:
             print(f"       {b.name}  ({b.relative_date}){_pr_suffix(prs, b.name)}")
 
-    worktree_entries = gh.worktree_info(exclude_branch=current_branch)
+    worktree_entries = gh.worktree_info(
+        exclude_branch=current_branch, default_ref=f"origin/{current_branch}"
+    )
     if worktree_entries:
         print("worktrees")
         for w in worktree_entries:
             path = _dim(_display_path(w.path))
-            print(f"       {w.branch}  ({w.relative_date})  {path}{_pr_suffix(prs, w.branch)}")
+            print(
+                f"       {w.branch}  ({w.relative_date})  {path}"
+                f"{_pr_suffix(prs, w.branch)}{_unmerged_note(w.unmerged)}"
+            )
 
 
 _MAX_LISTED_CHANGED_FILES = 10
@@ -146,10 +161,13 @@ _MAX_LISTED_CHANGED_FILES = 10
 def _print_local_status(status: gh.LocalStatus) -> None:
     if status.ahead is None:
         push_note = _dim("no upstream")
-    elif status.ahead > 0:
-        push_note = _yellow(f"{status.ahead} unpushed")
     else:
-        push_note = _green("pushed")
+        notes = []
+        if status.ahead > 0:
+            notes.append(f"{status.ahead} unpushed")
+        if status.behind:
+            notes.append(f"{status.behind} behind")
+        push_note = _yellow(", ".join(notes)) if notes else _green("pushed")
 
     tree_note = _red("dirty") if status.changed_files else _green("clean")
     untracked_note = (
@@ -165,6 +183,7 @@ def _print_local_status(status: gh.LocalStatus) -> None:
 
 
 def cmd_status(args: argparse.Namespace) -> int:
+    fetch_thread = gh.start_background_fetch()
     try:
         repo = gh.repo_info()
         branch = gh.current_branch()
@@ -174,6 +193,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 
     print(f"repo   {repo.name_with_owner}  ({repo.url})")
     print(f"branch {branch}" + (" (default)" if branch == repo.default_branch else ""))
+    fetch_thread.join(timeout=5)  # cap the wait; a slow fetch just means stale ahead/behind
     _print_local_status(gh.local_status())
 
     pr = gh.pull_request_for_branch(branch)

@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import functools
 import json
+import os
 import re
 import subprocess
+import threading
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -29,9 +31,11 @@ class WazupError(Exception):
     """Raised when a required CLI is missing or a command fails."""
 
 
-def _run(args: list[str]) -> str:
+def _run(args: list[str], env: dict[str, str] | None = None) -> str:
     try:
-        result = subprocess.run(args, capture_output=True, text=True, check=False)
+        result = subprocess.run(
+            args, capture_output=True, text=True, check=False, env=env
+        )
     except FileNotFoundError as exc:
         raise WazupError(f"`{args[0]}` not found on PATH") from exc
     if result.returncode != 0:
@@ -56,26 +60,60 @@ class ChangedFile:
 @dataclass
 class LocalStatus:
     ahead: int | None
+    behind: int | None
     changed_files: list[ChangedFile]
     untracked_count: int
 
 
+def start_background_fetch() -> threading.Thread:
+    """Kick off `git fetch` on its own thread so `local_status()` can report
+    ahead/behind against origin without a stale remote-tracking ref. Runs
+    concurrently with the gh API calls the caller is about to make, so its
+    latency overlaps with work that's already happening rather than adding
+    to it — join the returned thread before calling `local_status()`.
+    Failure (offline, no fetch access, etc.) is a silent no-op, same as
+    `ensure_gh_account_for_repo`: this is best-effort freshness, not a hard
+    requirement. Runs with prompts disabled (GIT_TERMINAL_PROMPT=0,
+    batch-mode SSH) so a repo with no cached credentials fails fast instead
+    of blocking forever on a prompt nothing can answer — there's no TTY
+    attached to a background thread we `join()` on before printing."""
+
+    env = {
+        **os.environ,
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_SSH_COMMAND": os.environ.get("GIT_SSH_COMMAND", "ssh") + " -o BatchMode=yes",
+    }
+
+    def fetch() -> None:
+        try:
+            _run(["git", "fetch"], env=env)
+        except WazupError:
+            pass
+
+    thread = threading.Thread(target=fetch, daemon=True)
+    thread.start()
+    return thread
+
+
 def local_status() -> LocalStatus:
-    """Unpushed-commit count (None if no upstream), tracked changes (staged
-    or unstaged), and a separate untracked-file count. Untracked files are
-    kept out of `changed_files` since they're often noise (scratch files,
-    build output) rather than something you forgot to commit."""
+    """Unpushed/behind commit counts (None if no upstream), tracked changes
+    (staged or unstaged), and a separate untracked-file count. Untracked
+    files are kept out of `changed_files` since they're often noise (scratch
+    files, build output) rather than something you forgot to commit."""
     try:
         data = _run(["git", "status", "--porcelain=v2", "--branch"])
     except WazupError:
-        return LocalStatus(ahead=None, changed_files=[], untracked_count=0)
+        return LocalStatus(ahead=None, behind=None, changed_files=[], untracked_count=0)
 
     ahead = None
+    behind = None
     changed: list[ChangedFile] = []
     untracked_count = 0
     for line in data.splitlines():
         if line.startswith("# branch.ab "):
-            ahead = int(line.split()[2].lstrip("+"))
+            _, _, ahead_str, behind_str = line.split()
+            ahead = int(ahead_str.lstrip("+"))
+            behind = int(behind_str.lstrip("-"))
         elif line.startswith("1 "):
             xy, path = line.split(" ", 8)[1], line.split(" ", 8)[8]
             changed.append(ChangedFile(status=xy[0] if xy[0] != "." else xy[1], path=path))
@@ -89,7 +127,9 @@ def local_status() -> LocalStatus:
         elif line.startswith("? "):
             untracked_count += 1
 
-    return LocalStatus(ahead=ahead, changed_files=changed, untracked_count=untracked_count)
+    return LocalStatus(
+        ahead=ahead, behind=behind, changed_files=changed, untracked_count=untracked_count
+    )
 
 
 def current_repo() -> RepoInfo | None:
@@ -205,10 +245,16 @@ class WorktreeInfo:
     branch: str
     path: str
     relative_date: str
+    unmerged: int | None
 
 
-def worktree_info(exclude_branch: str) -> list[WorktreeInfo]:
-    """Other worktrees' branches, most recently committed to first."""
+def worktree_info(exclude_branch: str, default_ref: str | None = None) -> list[WorktreeInfo]:
+    """Other worktrees' branches, most recently committed to first. If
+    `default_ref` is given (e.g. "origin/main"), each entry also reports how
+    many commits it has that aren't reachable from that ref — 0 means it's
+    fully merged and the worktree is safe to prune. None (rather than a
+    count) means it couldn't be determined, e.g. `default_ref` doesn't exist
+    locally yet."""
     entries: list[tuple[int, WorktreeInfo]] = []
     for branch, path in worktree_branches().items():
         if branch == exclude_branch:
@@ -218,8 +264,21 @@ def worktree_info(exclude_branch: str) -> list[WorktreeInfo]:
         except WazupError:
             continue
         timestamp, _, relative_date = data.partition("\t")
+
+        unmerged = None
+        if default_ref is not None:
+            try:
+                unmerged = int(_run(["git", "rev-list", "--count", f"{default_ref}..{branch}"]))
+            except WazupError:
+                pass
+
         entries.append(
-            (int(timestamp), WorktreeInfo(branch=branch, path=path, relative_date=relative_date))
+            (
+                int(timestamp),
+                WorktreeInfo(
+                    branch=branch, path=path, relative_date=relative_date, unmerged=unmerged
+                ),
+            )
         )
     entries.sort(key=lambda e: e[0], reverse=True)
     return [w for _, w in entries]
