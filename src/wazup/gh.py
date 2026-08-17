@@ -8,6 +8,7 @@ import os
 import re
 import subprocess
 import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from urllib.parse import urlparse
@@ -593,11 +594,57 @@ def prs_awaiting_my_review(since: str) -> list[PullRequestSummary]:
     ]
 
 
-def _job_log_tail(run_id: str, job_id: str, lines: int) -> str | None:
+_LOG_CACHE_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
+
+
+def _log_cache_dir() -> str:
+    base = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
+    return os.path.join(base, "wazup", "logs")
+
+
+def _log_cache_path(run_id: str, job_id: str) -> str:
+    return os.path.join(_log_cache_dir(), f"{run_id}-{job_id}.log")
+
+
+def _prune_log_cache() -> None:
+    """Drop cached logs older than a week, so the cache doesn't grow
+    forever. Only runs on a cache miss (not every read), since that's
+    already the slow path."""
+    cache_dir = _log_cache_dir()
+    cutoff = time.time() - _LOG_CACHE_MAX_AGE_SECONDS
     try:
-        raw = _run(["gh", "run", "view", run_id, "--job", job_id, "--log-failed"])
-    except WazupError:
-        return None
+        entries = os.scandir(cache_dir)
+    except OSError:
+        return
+    with entries:
+        for entry in entries:
+            try:
+                if entry.stat().st_mtime < cutoff:
+                    os.remove(entry.path)
+            except OSError:
+                pass
+
+
+def _job_log_tail(run_id: str, job_id: str, lines: int) -> str | None:
+    """A job's log is only fetched once we already know it's in a terminal
+    (failed) state, so its content is immutable — safe to cache to disk
+    forever, keyed by run/job id, instead of re-fetching on every --why."""
+    cache_path = _log_cache_path(run_id, job_id)
+    try:
+        with open(cache_path, encoding="utf-8") as f:
+            raw = f.read()
+    except OSError:
+        try:
+            raw = _run(["gh", "run", "view", run_id, "--job", job_id, "--log-failed"])
+        except WazupError:
+            return None
+        try:
+            os.makedirs(_log_cache_dir(), exist_ok=True)
+            with open(cache_path, "w", encoding="utf-8") as f:
+                f.write(raw)
+            _prune_log_cache()
+        except OSError:
+            pass
 
     cleaned = [_LOG_LINE_RE.sub("", line) for line in raw.splitlines() if line.strip()]
     if not cleaned:
