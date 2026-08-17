@@ -80,9 +80,15 @@ def _print_recent_branches(exclude: str) -> None:
     branches = gh.recent_local_branches(limit=8, exclude=exclude)
     if not branches:
         return
+    prs = gh.open_prs_by_branch()
     print("recent branches")
     for b in branches:
-        print(f"       {b.name}  ({b.relative_date})")
+        pr = prs.get(b.name)
+        suffix = ""
+        if pr:
+            draft = " draft" if pr.is_draft else ""
+            suffix = f"  {_green(f'PR #{pr.number}{draft}')}"
+        print(f"       {b.name}  ({b.relative_date}){suffix}")
 
 
 def cmd_status(args: argparse.Namespace) -> int:

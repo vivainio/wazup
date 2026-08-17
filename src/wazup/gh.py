@@ -126,6 +126,38 @@ def recent_local_branches(limit: int = 8, exclude: str | None = None) -> list[Br
 
 
 @dataclass
+class BranchPr:
+    number: int
+    url: str
+    state: str
+    is_draft: bool
+
+
+def open_prs_by_branch() -> dict[str, BranchPr]:
+    """One call to map every open PR's head branch to its PR, for cheap lookup."""
+    try:
+        data = _run_json(
+            [
+                "gh",
+                "pr",
+                "list",
+                "--json",
+                "number,url,state,isDraft,headRefName",
+                "--limit",
+                "100",
+            ]
+        )
+    except WazupError:
+        return {}
+    return {
+        p["headRefName"]: BranchPr(
+            number=p["number"], url=p["url"], state=p["state"], is_draft=p["isDraft"]
+        )
+        for p in data
+    }
+
+
+@dataclass
 class RepoInfo:
     name_with_owner: str
     url: str
