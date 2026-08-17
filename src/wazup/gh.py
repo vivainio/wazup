@@ -8,6 +8,8 @@ import subprocess
 from dataclasses import dataclass
 
 _RUN_JOB_URL_RE = re.compile(r"/actions/runs/(\d+)/job/(\d+)")
+_RUN_URL_RE = re.compile(r"/actions/runs/(\d+)")
+_FAILED_CONCLUSIONS = {"failure", "timed_out", "startup_failure"}
 _LOG_LINE_RE = re.compile(r"^[^\t]*\t[^\t]*\t\S+Z\s?")
 _REMOTE_OWNER_RE = re.compile(r"github\.com[:/]([^/]+)/")
 
@@ -268,19 +270,9 @@ def prs_awaiting_my_review(since: str) -> list[PullRequestSummary]:
     ]
 
 
-def failure_log_tail(details_url: str | None, lines: int = 25) -> str | None:
-    """Best-effort tail of a failed GitHub Actions job's log, ending at the error."""
-    if not details_url:
-        return None
-    match = _RUN_JOB_URL_RE.search(details_url)
-    if not match:
-        return None
-    run_id, job_id = match.groups()
-
+def _job_log_tail(run_id: str, job_id: str, lines: int) -> str | None:
     try:
-        raw = _run(
-            ["gh", "run", "view", run_id, "--job", job_id, "--log-failed"]
-        )
+        raw = _run(["gh", "run", "view", run_id, "--job", job_id, "--log-failed"])
     except WazupError:
         return None
 
@@ -294,6 +286,43 @@ def failure_log_tail(details_url: str | None, lines: int = 25) -> str | None:
     )
     start = max(0, error_idx - lines + 1)
     return "\n".join(cleaned[start : error_idx + 1])
+
+
+def _failed_job_id(run_id: str) -> str | None:
+    try:
+        jobs = _run_json(["gh", "run", "view", run_id, "--json", "jobs"])["jobs"]
+    except WazupError:
+        return None
+    failed = next(
+        (j for j in jobs if (j.get("conclusion") or "").lower() in _FAILED_CONCLUSIONS),
+        None,
+    )
+    return str(failed["databaseId"]) if failed else None
+
+
+def failure_log_tail(details_url: str | None, lines: int = 25) -> str | None:
+    """Best-effort tail of a failed GitHub Actions job's log, ending at the error.
+
+    Accepts either a job-level detailsUrl (from a PR check) or a bare
+    run-level URL (from `gh run list`, which has no job id) — for the
+    latter, the failed job is resolved via `gh run view --json jobs`.
+    """
+    if not details_url:
+        return None
+
+    job_match = _RUN_JOB_URL_RE.search(details_url)
+    if job_match:
+        run_id, job_id = job_match.groups()
+    else:
+        run_match = _RUN_URL_RE.search(details_url)
+        if not run_match:
+            return None
+        run_id = run_match.group(1)
+        job_id = _failed_job_id(run_id)
+        if job_id is None:
+            return None
+
+    return _job_log_tail(run_id, job_id, lines)
 
 
 def my_recent_prs(since: str) -> list[PullRequestSummary]:
