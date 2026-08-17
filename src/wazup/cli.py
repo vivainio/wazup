@@ -76,6 +76,15 @@ def _print_checks(checks: list[gh.CheckRun], why: bool = False) -> None:
             _print_failure_detail(c)
 
 
+def _print_recent_branches(exclude: str) -> None:
+    branches = gh.recent_local_branches(limit=8, exclude=exclude)
+    if not branches:
+        return
+    print("recent branches")
+    for b in branches:
+        print(f"       {b.name}  ({b.relative_date})")
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     try:
         repo = gh.repo_info()
@@ -90,6 +99,8 @@ def cmd_status(args: argparse.Namespace) -> int:
     pr = gh.pull_request_for_branch(branch)
     if pr is None:
         print("pr     none")
+        if branch == repo.default_branch:
+            _print_recent_branches(exclude=branch)
         return 0
 
     state = pr.state.lower() + (" (draft)" if pr.is_draft else "")

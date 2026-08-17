@@ -97,6 +97,35 @@ def ensure_gh_account_for_repo() -> str | None:
 
 
 @dataclass
+class BranchInfo:
+    name: str
+    relative_date: str
+
+
+def recent_local_branches(limit: int = 8, exclude: str | None = None) -> list[BranchInfo]:
+    try:
+        data = _run(
+            [
+                "git",
+                "for-each-ref",
+                "refs/heads/",
+                "--sort=-committerdate",
+                "--format=%(refname:short)\t%(committerdate:relative)",
+                f"--count={limit + 1}",
+            ]
+        )
+    except WazupError:
+        return []
+
+    branches = []
+    for line in data.splitlines():
+        name, _, relative_date = line.partition("\t")
+        if name and name != exclude:
+            branches.append(BranchInfo(name=name, relative_date=relative_date))
+    return branches[:limit]
+
+
+@dataclass
 class RepoInfo:
     name_with_owner: str
     url: str
