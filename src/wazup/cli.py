@@ -187,7 +187,12 @@ def _pr_suffix(prs: dict[str, gh.BranchPr], branch: str) -> str:
     return f"  {_green(f'PR #{pr.number}{draft}')}"
 
 
-def _unmerged_note(unmerged: int | None) -> str:
+def _worktree_status_note(unmerged: int | None, dirty: bool) -> str:
+    # "merged" is a safe-to-prune claim (see gh.worktree_info's docstring),
+    # so it must not appear next to "dirty" — pruning a dirty worktree loses
+    # uncommitted work regardless of whether its commits are merged.
+    if dirty:
+        return f"  {_red('dirty')}"
     if unmerged is None:
         return ""
     if unmerged == 0:
@@ -217,7 +222,7 @@ def _print_recent_branches(current_branch: str) -> None:
             path = _dim(_display_path(w.path))
             print(
                 f"       {w.branch}  ({w.relative_date})  {path}"
-                f"{_pr_suffix(prs, w.branch)}{_unmerged_note(w.unmerged)}"
+                f"{_pr_suffix(prs, w.branch)}{_worktree_status_note(w.unmerged, w.dirty)}"
             )
 
 

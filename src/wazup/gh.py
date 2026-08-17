@@ -246,6 +246,7 @@ class WorktreeInfo:
     path: str
     relative_date: str
     unmerged: int | None
+    dirty: bool
 
 
 def worktree_info(exclude_branch: str, default_ref: str | None = None) -> list[WorktreeInfo]:
@@ -272,11 +273,20 @@ def worktree_info(exclude_branch: str, default_ref: str | None = None) -> list[W
             except WazupError:
                 pass
 
+        try:
+            dirty = bool(_run(["git", "-C", path, "status", "--porcelain"]))
+        except WazupError:
+            dirty = False
+
         entries.append(
             (
                 int(timestamp),
                 WorktreeInfo(
-                    branch=branch, path=path, relative_date=relative_date, unmerged=unmerged
+                    branch=branch,
+                    path=path,
+                    relative_date=relative_date,
+                    unmerged=unmerged,
+                    dirty=dirty,
                 ),
             )
         )
