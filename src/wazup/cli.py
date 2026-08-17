@@ -108,6 +108,39 @@ def _print_checks(checks: list[gh.CheckRun], why: bool = False) -> None:
         _print_why_hint()
 
 
+def _print_ci_fallback(branch: str, why: bool) -> bool:
+    """CI status for a branch with no open PR, from its latest workflow
+    runs — this is what `pr.checks` would show if there were a PR to attach
+    to. Returns whether any runs were found."""
+    runs = gh.latest_runs_for_branch(branch, limit=10)
+    if not runs:
+        return False
+
+    checks = [gh.CheckRun(r.name, r.status, r.conclusion, r.url) for r in runs]
+    latest = checks[0]
+    earlier_failures = sum(1 for c in checks[1:] if _is_failed(c))
+
+    print("ci")
+    print(f"       {_check_icon(latest.conclusion, latest.status)} {latest.name}  {latest.details_url}")
+
+    if not _is_failed(latest):
+        if earlier_failures:
+            note = f"fixed — {earlier_failures} of the last {len(checks)} runs had failed"
+            print(f"         {_dim(note)}")
+        return True
+
+    summary, tail = _fetch_failure_info([latest], why)[0]
+    if summary:
+        print(f"         {_dim(summary)}")
+    if why:
+        _print_failure_detail(latest, tail)
+    if earlier_failures:
+        print(f"         {_dim(f'{earlier_failures + 1} of the last {len(checks)} runs failed')}")
+    if not why:
+        _print_why_hint()
+    return True
+
+
 def _display_path(path: str) -> str:
     home = os.path.expanduser("~")
     return "~" + path[len(home) :] if path.startswith(home) else path
@@ -199,6 +232,12 @@ def cmd_status(args: argparse.Namespace) -> int:
     pr = gh.pull_request_for_branch(branch)
     if pr is None:
         print("pr     none")
+        try:
+            found = _print_ci_fallback(branch, args.why)
+        except gh.WazupError:
+            found = False
+        if not found:
+            print("ci     none")
         if branch == repo.default_branch:
             _print_recent_branches(current_branch=branch)
         return 0
@@ -226,39 +265,15 @@ def cmd_ci(args: argparse.Namespace) -> int:
         _print_checks(pr.checks, why=args.why)
         return 0
 
+    print(f"branch {branch}  (no open PR)")
     try:
-        runs = gh.latest_runs_for_branch(branch, limit=10)
+        found = _print_ci_fallback(branch, args.why)
     except gh.WazupError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    if not runs:
+    if not found:
         print(f"no CI runs found for branch {branch}")
-        return 0
-
-    checks = [gh.CheckRun(r.name, r.status, r.conclusion, r.url) for r in runs]
-    latest = checks[0]
-    earlier_failures = sum(1 for c in checks[1:] if _is_failed(c))
-
-    print(f"branch {branch}  (no open PR)")
-
-    if not _is_failed(latest):
-        print(f"  {_check_icon(latest.conclusion, latest.status)} {latest.name}  {latest.details_url}")
-        if earlier_failures:
-            note = f"fixed — {earlier_failures} of the last {len(checks)} runs had failed"
-            print(f"    {_dim(note)}")
-        return 0
-
-    print(f"  {_check_icon(latest.conclusion, latest.status)} {latest.name}  {latest.details_url}")
-    summary, tail = _fetch_failure_info([latest], args.why)[0]
-    if summary:
-        print(f"    {_dim(summary)}")
-    if args.why:
-        _print_failure_detail(latest, tail)
-    if earlier_failures:
-        print(f"    {_dim(f'{earlier_failures + 1} of the last {len(checks)} runs failed')}")
-    if not args.why:
-        _print_why_hint()
     return 0
 
 
