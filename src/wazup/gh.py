@@ -50,15 +50,26 @@ def _remote_owner() -> str | None:
     return match.group(1) if match else None
 
 
+def _login_matches_owner(login: str, owner: str) -> bool:
+    if login.lower() == owner.lower():
+        return True
+    # SSO-linked corporate identities are commonly "personalname_OrgName" —
+    # match those against org-owned repos by the part after the underscore.
+    if "_" in login:
+        return login.rsplit("_", 1)[1].lower() == owner.lower()
+    return False
+
+
 def ensure_gh_account_for_repo() -> str | None:
     """If this repo's owner has a logged-in gh account that isn't active, switch to it.
 
-    The switch is permanent (persists across sessions, like running
-    `gh auth switch` by hand), not just for this invocation. Returns a
-    human-readable notice if a switch happened, else None. Never raises:
-    any failure (no remote, gh not installed, no matching account) is a
-    silent no-op, since this is a best-effort preflight, not a hard
-    requirement.
+    Matches either an exact login (personal repos) or a "name_OrgName"
+    corporate SSO identity against the org (org repos). The switch is
+    permanent (persists across sessions, like running `gh auth switch` by
+    hand), not just for this invocation. Returns a human-readable notice
+    if a switch happened, else None. Never raises: any failure (no
+    remote, gh not installed, no matching account) is a silent no-op,
+    since this is a best-effort preflight, not a hard requirement.
     """
     owner = _remote_owner()
     if owner is None:
@@ -71,7 +82,7 @@ def ensure_gh_account_for_repo() -> str | None:
 
     accounts = data.get("hosts", {}).get("github.com", [])
     match = next(
-        (a for a in accounts if a.get("login", "").lower() == owner.lower()), None
+        (a for a in accounts if _login_matches_owner(a.get("login", ""), owner)), None
     )
     if match is None or match.get("active"):
         return None
