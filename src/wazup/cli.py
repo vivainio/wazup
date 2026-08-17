@@ -253,7 +253,7 @@ def _print_local_status(status: gh.LocalStatus) -> None:
             print(f"       {f.status} {f.path}")
 
 
-def _print_worktree_note(repo: gh.RepoInfo, branch: str) -> None:
+def _print_worktree_note(repo: gh.RepoInfo, branch: str, local: gh.LocalStatus) -> None:
     """For a linked worktree (not the repo's main checkout) on a non-default
     branch, show how it stands against the default branch — the "ahead of
     origin" figure in the `local` line is against this branch's own
@@ -266,11 +266,19 @@ def _print_worktree_note(repo: gh.RepoInfo, branch: str) -> None:
         ahead = gh.commits_ahead_of(repo.default_branch)
     if ahead is None:
         return
-    if ahead == 0:
-        note = _dim(f"merged into {repo.default_branch}")
-    else:
+    if ahead > 0:
         note = _yellow(f"{ahead} commit{'s' if ahead != 1 else ''} not in {repo.default_branch}")
-    print(f"worktree  {note}")
+        print(f"worktree  {note}")
+        return
+
+    print(f"worktree  {_dim(f'merged into {repo.default_branch}')}")
+    # merged is not enough on its own — deleting a dirty worktree loses
+    # uncommitted work regardless of what's already landed on main.
+    if local.changed_files or local.untracked_count:
+        return
+    root = gh.worktree_root()
+    if root:
+        print(f"          {_dim(f'safe to delete: git worktree remove {root}')}")
 
 
 def _is_local_clean(status: gh.LocalStatus) -> bool:
@@ -315,7 +323,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     fetch_thread.join(timeout=5)  # cap the wait; a slow fetch just means stale ahead/behind
     local = gh.local_status()
     _print_local_status(local)
-    _print_worktree_note(repo, branch)
+    _print_worktree_note(repo, branch, local)
 
     pr = gh.pull_request_for_branch(branch)
     if pr is None:

@@ -77,6 +77,13 @@ def commits_ahead_of(ref: str) -> int | None:
         return None
 
 
+def worktree_root() -> str | None:
+    try:
+        return _run(["git", "rev-parse", "--show-toplevel"])
+    except WazupError:
+        return None
+
+
 @dataclass
 class ChangedFile:
     status: str  # single-letter: M, A, D, R, C, U
