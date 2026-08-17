@@ -170,6 +170,24 @@ def recent_local_branches(limit: int = 8, exclude: str | None = None) -> list[Br
     return branches[:limit]
 
 
+def worktree_branches() -> dict[str, str]:
+    """Map local branch name -> worktree path, for branches checked out in a
+    worktree (including the current one)."""
+    try:
+        data = _run(["git", "worktree", "list", "--porcelain"])
+    except WazupError:
+        return {}
+
+    result: dict[str, str] = {}
+    path: str | None = None
+    for line in data.splitlines():
+        if line.startswith("worktree "):
+            path = line[len("worktree ") :]
+        elif line.startswith("branch refs/heads/") and path is not None:
+            result[line[len("branch refs/heads/") :]] = path
+    return result
+
+
 @dataclass
 class BranchPr:
     number: int

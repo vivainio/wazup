@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from datetime import date, timedelta
 
@@ -76,19 +77,29 @@ def _print_checks(checks: list[gh.CheckRun], why: bool = False) -> None:
             _print_failure_detail(c)
 
 
+def _display_path(path: str) -> str:
+    home = os.path.expanduser("~")
+    return "~" + path[len(home) :] if path.startswith(home) else path
+
+
 def _print_recent_branches(exclude: str) -> None:
     branches = gh.recent_local_branches(limit=8, exclude=exclude)
     if not branches:
         return
     prs = gh.open_prs_by_branch()
+    worktrees = gh.worktree_branches()
     print("recent branches")
     for b in branches:
         pr = prs.get(b.name)
-        suffix = ""
+        pr_suffix = ""
         if pr:
             draft = " draft" if pr.is_draft else ""
-            suffix = f"  {_green(f'PR #{pr.number}{draft}')}"
-        print(f"       {b.name}  ({b.relative_date}){suffix}")
+            pr_suffix = f"  {_green(f'PR #{pr.number}{draft}')}"
+
+        wt_path = worktrees.get(b.name)
+        wt_suffix = f"  {_dim(f'[worktree: {_display_path(wt_path)}]')}" if wt_path else ""
+
+        print(f"       {b.name}  ({b.relative_date}){pr_suffix}{wt_suffix}")
 
 
 _MAX_LISTED_CHANGED_FILES = 10
