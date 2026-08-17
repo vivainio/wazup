@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import functools
 import json
 import re
 import subprocess
 from dataclasses import dataclass
+from datetime import datetime
 
 _RUN_JOB_URL_RE = re.compile(r"/actions/runs/(\d+)/job/(\d+)")
 _RUN_URL_RE = re.compile(r"/actions/runs/(\d+)")
@@ -447,11 +449,15 @@ def _job_log_tail(run_id: str, job_id: str, lines: int) -> str | None:
     return "\n".join(cleaned[start : error_idx + 1])
 
 
-def _run_jobs(run_id: str) -> list[dict]:
+@functools.lru_cache(maxsize=None)
+def _run_jobs(run_id: str) -> tuple[dict, ...]:
+    """Cached: a PR's checks are usually jobs of the same workflow run, so
+    without this, listing N failed checks from one run would re-fetch the
+    identical job list N times."""
     try:
-        return _run_json(["gh", "run", "view", run_id, "--json", "jobs"])["jobs"]
+        return tuple(_run_json(["gh", "run", "view", run_id, "--json", "jobs"])["jobs"])
     except WazupError:
-        return []
+        return ()
 
 
 def _find_failed_job(run_id: str) -> dict | None:
@@ -487,19 +493,40 @@ def failure_log_tail(details_url: str | None, lines: int = 25) -> str | None:
     return _job_log_tail(run_id, job_id, lines)
 
 
-def _failed_step_names(job: dict) -> list[str]:
-    return [
-        s["name"]
-        for s in job.get("steps") or []
-        if (s.get("conclusion") or "").lower() in _FAILED_CONCLUSIONS
-    ]
+def _duration(started: str | None, completed: str | None) -> str | None:
+    if not started or not completed:
+        return None
+    try:
+        start = datetime.fromisoformat(started.replace("Z", "+00:00"))
+        end = datetime.fromisoformat(completed.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return f"{int((end - start).total_seconds())}s"
+
+
+def _failed_step_summaries(job: dict) -> list[str]:
+    summaries = []
+    for s in job.get("steps") or []:
+        if (s.get("conclusion") or "").lower() not in _FAILED_CONCLUSIONS:
+            continue
+        dur = _duration(s.get("startedAt"), s.get("completedAt"))
+        summaries.append(f"{s['name']} ({dur})" if dur else s["name"])
+    return summaries
 
 
 def failed_steps_summary(details_url: str | None) -> str | None:
-    """One-line "job: failed step, ..." summary — job/step metadata only, no
-    log fetch, so it's cheap enough to show by default (not gated behind
+    """One-line summary of what failed — job/step metadata only, no log
+    fetch, so it's cheap enough to show by default (not gated behind
     --why). Accepts a job-level or bare run-level Actions URL, same as
-    failure_log_tail."""
+    failure_log_tail.
+
+    Normally this names the failed step(s), each with how long it ran
+    before failing. If no individual step is marked failed (the job died
+    some other way - cancelled, infra failure), falls back to how far the
+    job got: how many steps completed and how long it ran - still useful
+    context, and still free of any extra fetch beyond the job/step list
+    already retrieved.
+    """
     if not details_url:
         return None
 
@@ -517,8 +544,18 @@ def failed_steps_summary(details_url: str | None) -> str | None:
 
     if job is None:
         return None
-    steps = _failed_step_names(job)
-    return f"{job['name']}: {', '.join(steps)}" if steps else job["name"]
+
+    steps = _failed_step_summaries(job)
+    if steps:
+        return f"{job['name']}: {', '.join(steps)}"
+
+    all_steps = job.get("steps") or []
+    completed = sum(1 for s in all_steps if s.get("status") == "completed")
+    dur = _duration(job.get("startedAt"), job.get("completedAt"))
+    if not all_steps:
+        return job["name"]
+    progress = f"stopped after {completed}/{len(all_steps)} steps"
+    return f"{job['name']} ({progress}, {dur})" if dur else f"{job['name']} ({progress})"
 
 
 def my_recent_prs(since: str) -> list[PullRequestSummary]:

@@ -66,19 +66,27 @@ def _print_failure_detail(c: gh.CheckRun) -> None:
         print(f"       see: {c.details_url}")
 
 
+def _print_why_hint() -> None:
+    print(f"       {_dim('run with --why to see the failing log')}")
+
+
 def _print_checks(checks: list[gh.CheckRun], why: bool = False) -> None:
     if not checks:
         print("ci     no checks reported")
         return
     print("ci")
+    any_failed = False
     for c in checks:
         print(f"       {_check_icon(c.conclusion, c.status)} {c.name}")
         if _is_failed(c):
+            any_failed = True
             summary = gh.failed_steps_summary(c.details_url)
             if summary:
                 print(f"         {_dim(summary)}")
             if why:
                 _print_failure_detail(c)
+    if any_failed and not why:
+        _print_why_hint()
 
 
 def _display_path(path: str) -> str:
@@ -209,6 +217,8 @@ def cmd_ci(args: argparse.Namespace) -> int:
             print(f"    {_dim(summary)}")
         if args.why:
             _print_failure_detail(c)
+    if not args.why:
+        _print_why_hint()
     return 0
 
 
