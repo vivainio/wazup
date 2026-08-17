@@ -1,0 +1,17 @@
+[project]
+name = "wazup"
+version = "0.1.0"
+description = "What's up with this repo: PR and CI status at a glance"
+readme = "README.md"
+authors = [
+    { name = "Ville Vainio", email = "vivainio@gmail.com" }
+]
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+wazup = "wazup:main"
+
+[build-system]
+requires = ["uv_build>=0.12.3,<0.13.0"]
+build-backend = "uv_build"
