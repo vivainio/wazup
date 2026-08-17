@@ -447,16 +447,18 @@ def _job_log_tail(run_id: str, job_id: str, lines: int) -> str | None:
     return "\n".join(cleaned[start : error_idx + 1])
 
 
-def _failed_job_id(run_id: str) -> str | None:
+def _run_jobs(run_id: str) -> list[dict]:
     try:
-        jobs = _run_json(["gh", "run", "view", run_id, "--json", "jobs"])["jobs"]
+        return _run_json(["gh", "run", "view", run_id, "--json", "jobs"])["jobs"]
     except WazupError:
-        return None
-    failed = next(
-        (j for j in jobs if (j.get("conclusion") or "").lower() in _FAILED_CONCLUSIONS),
+        return []
+
+
+def _find_failed_job(run_id: str) -> dict | None:
+    return next(
+        (j for j in _run_jobs(run_id) if (j.get("conclusion") or "").lower() in _FAILED_CONCLUSIONS),
         None,
     )
-    return str(failed["databaseId"]) if failed else None
 
 
 def failure_log_tail(details_url: str | None, lines: int = 25) -> str | None:
@@ -477,11 +479,46 @@ def failure_log_tail(details_url: str | None, lines: int = 25) -> str | None:
         if not run_match:
             return None
         run_id = run_match.group(1)
-        job_id = _failed_job_id(run_id)
-        if job_id is None:
+        failed_job = _find_failed_job(run_id)
+        if failed_job is None:
             return None
+        job_id = str(failed_job["databaseId"])
 
     return _job_log_tail(run_id, job_id, lines)
+
+
+def _failed_step_names(job: dict) -> list[str]:
+    return [
+        s["name"]
+        for s in job.get("steps") or []
+        if (s.get("conclusion") or "").lower() in _FAILED_CONCLUSIONS
+    ]
+
+
+def failed_steps_summary(details_url: str | None) -> str | None:
+    """One-line "job: failed step, ..." summary — job/step metadata only, no
+    log fetch, so it's cheap enough to show by default (not gated behind
+    --why). Accepts a job-level or bare run-level Actions URL, same as
+    failure_log_tail."""
+    if not details_url:
+        return None
+
+    job_match = _RUN_JOB_URL_RE.search(details_url)
+    if job_match:
+        run_id, job_id = job_match.groups()
+        job = next(
+            (j for j in _run_jobs(run_id) if str(j.get("databaseId")) == job_id), None
+        )
+    else:
+        run_match = _RUN_URL_RE.search(details_url)
+        if not run_match:
+            return None
+        job = _find_failed_job(run_match.group(1))
+
+    if job is None:
+        return None
+    steps = _failed_step_names(job)
+    return f"{job['name']}: {', '.join(steps)}" if steps else job["name"]
 
 
 def my_recent_prs(since: str) -> list[PullRequestSummary]:

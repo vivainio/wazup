@@ -73,8 +73,12 @@ def _print_checks(checks: list[gh.CheckRun], why: bool = False) -> None:
     print("ci")
     for c in checks:
         print(f"       {_check_icon(c.conclusion, c.status)} {c.name}")
-        if why and _is_failed(c):
-            _print_failure_detail(c)
+        if _is_failed(c):
+            summary = gh.failed_steps_summary(c.details_url)
+            if summary:
+                print(f"         {_dim(summary)}")
+            if why:
+                _print_failure_detail(c)
 
 
 def _display_path(path: str) -> str:
@@ -176,7 +180,7 @@ def cmd_ci(args: argparse.Namespace) -> int:
         return 0
 
     try:
-        runs = gh.latest_runs_for_branch(branch)
+        runs = gh.latest_runs_for_branch(branch, limit=10)
     except gh.WazupError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -185,12 +189,26 @@ def cmd_ci(args: argparse.Namespace) -> int:
         print(f"no CI runs found for branch {branch}")
         return 0
 
-    print(f"branch {branch}  (no open PR, showing latest workflow runs)")
-    for r in runs:
-        check = gh.CheckRun(r.name, r.status, r.conclusion, r.url)
-        print(f"  {_check_icon(check.conclusion, check.status)} {check.name}  {r.url}")
-        if args.why and _is_failed(check):
-            _print_failure_detail(check)
+    checks = [gh.CheckRun(r.name, r.status, r.conclusion, r.url) for r in runs]
+    failed = [c for c in checks if _is_failed(c)]
+
+    print(f"branch {branch}  (no open PR)")
+    if not failed:
+        latest = checks[0]
+        print(
+            f"  {_check_icon(latest.conclusion, latest.status)} {latest.name}"
+            f"  {latest.details_url}"
+        )
+        return 0
+
+    print(f"  {len(failed)} of the last {len(checks)} runs failed:")
+    for c in failed:
+        print(f"  {_check_icon(c.conclusion, c.status)} {c.name}  {c.details_url}")
+        summary = gh.failed_steps_summary(c.details_url)
+        if summary:
+            print(f"    {_dim(summary)}")
+        if args.why:
+            _print_failure_detail(c)
     return 0
 
 
