@@ -217,25 +217,26 @@ def cmd_ci(args: argparse.Namespace) -> int:
         return 0
 
     checks = [gh.CheckRun(r.name, r.status, r.conclusion, r.url) for r in runs]
-    failed = [c for c in checks if _is_failed(c)]
+    latest = checks[0]
+    earlier_failures = sum(1 for c in checks[1:] if _is_failed(c))
 
     print(f"branch {branch}  (no open PR)")
-    if not failed:
-        latest = checks[0]
-        print(
-            f"  {_check_icon(latest.conclusion, latest.status)} {latest.name}"
-            f"  {latest.details_url}"
-        )
+
+    if not _is_failed(latest):
+        print(f"  {_check_icon(latest.conclusion, latest.status)} {latest.name}  {latest.details_url}")
+        if earlier_failures:
+            note = f"fixed — {earlier_failures} of the last {len(checks)} runs had failed"
+            print(f"    {_dim(note)}")
         return 0
 
-    print(f"  {len(failed)} of the last {len(checks)} runs failed:")
-    info = _fetch_failure_info(failed, args.why)
-    for c, (summary, tail) in zip(failed, info):
-        print(f"  {_check_icon(c.conclusion, c.status)} {c.name}  {c.details_url}")
-        if summary:
-            print(f"    {_dim(summary)}")
-        if args.why:
-            _print_failure_detail(c, tail)
+    print(f"  {_check_icon(latest.conclusion, latest.status)} {latest.name}  {latest.details_url}")
+    summary, tail = _fetch_failure_info([latest], args.why)[0]
+    if summary:
+        print(f"    {_dim(summary)}")
+    if args.why:
+        _print_failure_detail(latest, tail)
+    if earlier_failures:
+        print(f"    {_dim(f'{earlier_failures + 1} of the last {len(checks)} runs failed')}")
     if not args.why:
         _print_why_hint()
     return 0
