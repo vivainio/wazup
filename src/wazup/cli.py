@@ -221,8 +221,8 @@ def _print_recent_branches(current_branch: str) -> None:
         for w in worktree_entries:
             path = _dim(_display_path(w.path))
             print(
-                f"       {w.branch}  ({w.relative_date})  {path}"
-                f"{_pr_suffix(prs, w.branch)}{_worktree_status_note(w.unmerged, w.dirty)}"
+                f"       {w.branch}  ({w.relative_date})"
+                f"{_pr_suffix(prs, w.branch)}{_worktree_status_note(w.unmerged, w.dirty)}  {path}"
             )
 
 
