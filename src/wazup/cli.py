@@ -84,11 +84,14 @@ def _print_failure_detail(c: gh.CheckRun, tail: str | None) -> None:
         print(f"       see: {c.details_url}")
 
 
-def _print_why_hint() -> None:
-    print(f"       {_dim('run with --why to see the failing log')}")
+def _print_why_hint(cmd: str) -> None:
+    # spells out the exact command (not just "pass --why") since this is
+    # parsed by AI agents as often as read by humans, and a vague hint gets
+    # ignored in favor of the agent improvising raw `gh`/`git` commands
+    print(f"       {_dim(f'run `{cmd} --why` to see the failing log')}")
 
 
-def _print_checks(checks: list[gh.CheckRun], why: bool = False) -> None:
+def _print_checks(checks: list[gh.CheckRun], cmd: str, why: bool = False) -> None:
     if not checks:
         print("ci     no checks reported")
         return
@@ -105,10 +108,10 @@ def _print_checks(checks: list[gh.CheckRun], why: bool = False) -> None:
             if why:
                 _print_failure_detail(c, tail)
     if failed and not why:
-        _print_why_hint()
+        _print_why_hint(cmd)
 
 
-def _print_ci_fallback(branch: str, why: bool) -> bool:
+def _print_ci_fallback(branch: str, why: bool, cmd: str) -> bool:
     """CI status for a branch with no open PR, from its latest workflow
     runs — this is what `pr.checks` would show if there were a PR to attach
     to. Returns whether any runs were found."""
@@ -137,7 +140,7 @@ def _print_ci_fallback(branch: str, why: bool) -> bool:
     if earlier_failures:
         print(f"         {_dim(f'{earlier_failures + 1} of the last {len(checks)} runs failed')}")
     if not why:
-        _print_why_hint()
+        _print_why_hint(cmd)
     return True
 
 
@@ -233,7 +236,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     if pr is None:
         print("pr     none")
         try:
-            found = _print_ci_fallback(branch, args.why)
+            found = _print_ci_fallback(branch, args.why, cmd="wazup")
         except gh.WazupError:
             found = False
         if not found:
@@ -248,7 +251,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     if pr.review_decision:
         print(f"review {pr.review_decision.replace('_', ' ').lower()}")
 
-    _print_checks(pr.checks, why=args.why)
+    _print_checks(pr.checks, cmd="wazup", why=args.why)
     return 0
 
 
@@ -262,12 +265,12 @@ def cmd_ci(args: argparse.Namespace) -> int:
 
     if pr is not None:
         print(f"pr #{pr.number} {pr.title}")
-        _print_checks(pr.checks, why=args.why)
+        _print_checks(pr.checks, cmd="wazup ci", why=args.why)
         return 0
 
     print(f"branch {branch}  (no open PR)")
     try:
-        found = _print_ci_fallback(branch, args.why)
+        found = _print_ci_fallback(branch, args.why, cmd="wazup ci")
     except gh.WazupError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
