@@ -46,13 +46,34 @@ def _check_icon(conclusion: str | None, status: str) -> str:
     return _dim("?")
 
 
-def _print_checks(checks: list[gh.CheckRun]) -> None:
+def _is_failed(c: gh.CheckRun) -> bool:
+    conclusion = (c.conclusion or "").upper()
+    status = (c.status or "").upper()
+    return conclusion in {"FAILURE", "TIMED_OUT", "STARTUP_FAILURE"} or status in {
+        "FAILURE",
+        "ERROR",
+    }
+
+
+def _print_failure_detail(c: gh.CheckRun) -> None:
+    tail = gh.failure_log_tail(c.details_url)
+    if tail:
+        print(_dim(f"       ── {c.name} (last lines before failure) ──"))
+        for line in tail.splitlines():
+            print(f"       {_dim('|')} {line}")
+    elif c.details_url:
+        print(f"       see: {c.details_url}")
+
+
+def _print_checks(checks: list[gh.CheckRun], why: bool = False) -> None:
     if not checks:
         print("ci     no checks reported")
         return
     print("ci")
     for c in checks:
         print(f"       {_check_icon(c.conclusion, c.status)} {c.name}")
+        if why and _is_failed(c):
+            _print_failure_detail(c)
 
 
 def cmd_status(args: argparse.Namespace) -> int:
@@ -77,7 +98,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     if pr.review_decision:
         print(f"review {pr.review_decision.replace('_', ' ').lower()}")
 
-    _print_checks(pr.checks)
+    _print_checks(pr.checks, why=args.why)
     return 0
 
 
@@ -91,7 +112,7 @@ def cmd_ci(args: argparse.Namespace) -> int:
 
     if pr is not None:
         print(f"pr #{pr.number} {pr.title}")
-        _print_checks(pr.checks)
+        _print_checks(pr.checks, why=args.why)
         return 0
 
     try:
@@ -106,7 +127,10 @@ def cmd_ci(args: argparse.Namespace) -> int:
 
     print(f"branch {branch}  (no open PR, showing latest workflow runs)")
     for r in runs:
-        print(f"  {_check_icon(r.conclusion, r.status)} {r.name}  {r.url}")
+        check = gh.CheckRun(r.name, r.status, r.conclusion, r.url)
+        print(f"  {_check_icon(check.conclusion, check.status)} {check.name}  {r.url}")
+        if args.why and _is_failed(check):
+            _print_failure_detail(check)
     return 0
 
 
@@ -148,15 +172,26 @@ def cmd_review(args: argparse.Namespace) -> int:
     return 0
 
 
+def _add_why_flag(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "-w",
+        "--why",
+        action="store_true",
+        help="for failed checks, show the tail of the failing job's log",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="wazup", description="what's up with this repo, right now"
     )
     parser.set_defaults(func=cmd_status)
+    _add_why_flag(parser)
     sub = parser.add_subparsers(dest="command")
 
     p_ci = sub.add_parser("ci", help="show CI status for the current branch/PR")
     p_ci.set_defaults(func=cmd_ci)
+    _add_why_flag(p_ci)
 
     p_my = sub.add_parser(
         "my", help="list your open PRs, or recent PR activity outside a repo"

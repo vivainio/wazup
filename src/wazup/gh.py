@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from dataclasses import dataclass
+
+_RUN_JOB_URL_RE = re.compile(r"/actions/runs/(\d+)/job/(\d+)")
+_LOG_LINE_RE = re.compile(r"^[^\t]*\t[^\t]*\t\S+Z\s?")
 
 
 class WazupError(Exception):
@@ -59,6 +63,7 @@ class CheckRun:
     name: str
     status: str
     conclusion: str | None
+    details_url: str | None = None
 
 
 @dataclass
@@ -92,6 +97,7 @@ def pull_request_for_branch(branch: str) -> PullRequest | None:
             name=c.get("name") or c.get("context", "?"),
             status=c.get("status", c.get("state", "?")),
             conclusion=c.get("conclusion"),
+            details_url=c.get("detailsUrl") or c.get("targetUrl"),
         )
         for c in data.get("statusCheckRollup") or []
     ]
@@ -206,6 +212,34 @@ def prs_awaiting_my_review(since: str) -> list[PullRequestSummary]:
         )
         for p in data
     ]
+
+
+def failure_log_tail(details_url: str | None, lines: int = 25) -> str | None:
+    """Best-effort tail of a failed GitHub Actions job's log, ending at the error."""
+    if not details_url:
+        return None
+    match = _RUN_JOB_URL_RE.search(details_url)
+    if not match:
+        return None
+    run_id, job_id = match.groups()
+
+    try:
+        raw = _run(
+            ["gh", "run", "view", run_id, "--job", job_id, "--log-failed"]
+        )
+    except WazupError:
+        return None
+
+    cleaned = [_LOG_LINE_RE.sub("", line) for line in raw.splitlines() if line.strip()]
+    if not cleaned:
+        return None
+
+    error_idx = next(
+        (i for i in range(len(cleaned) - 1, -1, -1) if "##[error]" in cleaned[i]),
+        len(cleaned) - 1,
+    )
+    start = max(0, error_idx - lines + 1)
+    return "\n".join(cleaned[start : error_idx + 1])
 
 
 def my_recent_prs(since: str) -> list[PullRequestSummary]:
