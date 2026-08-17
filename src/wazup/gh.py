@@ -38,27 +38,30 @@ def current_branch() -> str:
 
 @dataclass
 class ChangedFile:
-    status: str  # single-letter: M, A, D, R, C, U, ?
+    status: str  # single-letter: M, A, D, R, C, U
     path: str
 
 
 @dataclass
 class LocalStatus:
     ahead: int | None
-    is_dirty: bool
     changed_files: list[ChangedFile]
+    untracked_count: int
 
 
 def local_status() -> LocalStatus:
-    """Unpushed-commit count (None if no upstream), working-tree cleanliness,
-    and the changed files themselves (staged, unstaged, and untracked)."""
+    """Unpushed-commit count (None if no upstream), tracked changes (staged
+    or unstaged), and a separate untracked-file count. Untracked files are
+    kept out of `changed_files` since they're often noise (scratch files,
+    build output) rather than something you forgot to commit."""
     try:
         data = _run(["git", "status", "--porcelain=v2", "--branch"])
     except WazupError:
-        return LocalStatus(ahead=None, is_dirty=False, changed_files=[])
+        return LocalStatus(ahead=None, changed_files=[], untracked_count=0)
 
     ahead = None
     changed: list[ChangedFile] = []
+    untracked_count = 0
     for line in data.splitlines():
         if line.startswith("# branch.ab "):
             ahead = int(line.split()[2].lstrip("+"))
@@ -73,9 +76,9 @@ def local_status() -> LocalStatus:
             path = line.split(" ", 10)[10]
             changed.append(ChangedFile(status="U", path=path))
         elif line.startswith("? "):
-            changed.append(ChangedFile(status="?", path=line[2:]))
+            untracked_count += 1
 
-    return LocalStatus(ahead=ahead, is_dirty=bool(changed), changed_files=changed)
+    return LocalStatus(ahead=ahead, changed_files=changed, untracked_count=untracked_count)
 
 
 def current_repo() -> RepoInfo | None:

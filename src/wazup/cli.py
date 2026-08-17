@@ -102,8 +102,11 @@ def _print_local_status(status: gh.LocalStatus) -> None:
     else:
         push_note = _green("pushed")
 
-    tree_note = _red("dirty") if status.is_dirty else _green("clean")
-    print(f"local  {push_note}, {tree_note}")
+    tree_note = _red("dirty") if status.changed_files else _green("clean")
+    untracked_note = (
+        _dim(f"  (+{status.untracked_count} untracked)") if status.untracked_count else ""
+    )
+    print(f"local  {push_note}, {tree_note}{untracked_note}")
 
     if len(status.changed_files) > _MAX_LISTED_CHANGED_FILES:
         print(f"       {len(status.changed_files)} files changed")
