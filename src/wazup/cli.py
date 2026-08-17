@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 
 from . import gh
@@ -56,8 +57,25 @@ def _is_failed(c: gh.CheckRun) -> bool:
     }
 
 
-def _print_failure_detail(c: gh.CheckRun) -> None:
-    tail = gh.failure_log_tail(c.details_url)
+def _fetch_failure_info(
+    checks: list[gh.CheckRun], why: bool
+) -> list[tuple[str | None, str | None]]:
+    """(summary, log tail) per check, fetched concurrently — each is an
+    independent `gh` call, so threads (I/O-bound, stdlib-only) turn N
+    sequential round trips into ~1."""
+    if not checks:
+        return []
+
+    def fetch(c: gh.CheckRun) -> tuple[str | None, str | None]:
+        summary = gh.failed_steps_summary(c.details_url)
+        tail = gh.failure_log_tail(c.details_url) if why else None
+        return summary, tail
+
+    with ThreadPoolExecutor(max_workers=len(checks)) as pool:
+        return list(pool.map(fetch, checks))
+
+
+def _print_failure_detail(c: gh.CheckRun, tail: str | None) -> None:
     if tail:
         print(_dim(f"       ── {c.name} (last lines before failure) ──"))
         for line in tail.splitlines():
@@ -75,17 +93,18 @@ def _print_checks(checks: list[gh.CheckRun], why: bool = False) -> None:
         print("ci     no checks reported")
         return
     print("ci")
-    any_failed = False
+    failed = [c for c in checks if _is_failed(c)]
+    info = iter(_fetch_failure_info(failed, why))
+
     for c in checks:
         print(f"       {_check_icon(c.conclusion, c.status)} {c.name}")
         if _is_failed(c):
-            any_failed = True
-            summary = gh.failed_steps_summary(c.details_url)
+            summary, tail = next(info)
             if summary:
                 print(f"         {_dim(summary)}")
             if why:
-                _print_failure_detail(c)
-    if any_failed and not why:
+                _print_failure_detail(c, tail)
+    if failed and not why:
         _print_why_hint()
 
 
@@ -210,13 +229,13 @@ def cmd_ci(args: argparse.Namespace) -> int:
         return 0
 
     print(f"  {len(failed)} of the last {len(checks)} runs failed:")
-    for c in failed:
+    info = _fetch_failure_info(failed, args.why)
+    for c, (summary, tail) in zip(failed, info):
         print(f"  {_check_icon(c.conclusion, c.status)} {c.name}  {c.details_url}")
-        summary = gh.failed_steps_summary(c.details_url)
         if summary:
             print(f"    {_dim(summary)}")
         if args.why:
-            _print_failure_detail(c)
+            _print_failure_detail(c, tail)
     if not args.why:
         _print_why_hint()
     return 0
