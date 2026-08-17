@@ -578,7 +578,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_review.set_defaults(func=cmd_review)
 
     p_release = sub.add_parser(
-        "release", help="preflight checks for cutting a release (branch, sync, CI)"
+        "release",
+        aliases=["rel"],
+        help="preflight checks for cutting a release (branch, sync, CI)",
     )
     p_release.add_argument(
         "--target",
