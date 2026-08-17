@@ -422,6 +422,37 @@ def latest_runs_for_branch(branch: str, limit: int = 5) -> list[WorkflowRun]:
     ]
 
 
+_RUNNING_STATUSES = {"queued", "in_progress", "waiting", "pending", "requested"}
+
+
+def active_runs(limit: int = 20) -> list[WorkflowRun]:
+    """Currently running/queued workflow runs anywhere in the repo, not
+    scoped to a branch — a release-triggered run's headBranch is the tag,
+    not the branch whose push triggered CI, so `--branch` filtering misses
+    it entirely."""
+    data = _run_json(
+        [
+            "gh",
+            "run",
+            "list",
+            "--limit",
+            str(limit),
+            "--json",
+            "name,status,conclusion,url",
+        ]
+    )
+    return [
+        WorkflowRun(
+            name=r["name"],
+            status=r["status"],
+            conclusion=r.get("conclusion"),
+            url=r["url"],
+        )
+        for r in data
+        if (r.get("status") or "").lower() in _RUNNING_STATUSES
+    ]
+
+
 @dataclass
 class PullRequestSummary:
     number: int

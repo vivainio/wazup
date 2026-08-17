@@ -111,6 +111,20 @@ def _print_checks(checks: list[gh.CheckRun], cmd: str, why: bool = False) -> Non
         _print_why_hint(cmd)
 
 
+def _print_extra_active_runs(exclude_urls: set[str | None]) -> None:
+    """Runs elsewhere in the repo that are currently running/queued and
+    weren't already shown — e.g. a release-triggered publish workflow,
+    invisible to the branch-scoped CI lookup above."""
+    try:
+        active = gh.active_runs()
+    except gh.WazupError:
+        return
+    for r in active:
+        if r.url in exclude_urls:
+            continue
+        print(f"       {_check_icon(r.conclusion, r.status)} {r.name}  {r.url}")
+
+
 def _print_ci_fallback(branch: str, why: bool, cmd: str) -> bool:
     """CI status for a branch with no open PR, from its latest workflow
     runs — this is what `pr.checks` would show if there were a PR to attach
@@ -130,6 +144,7 @@ def _print_ci_fallback(branch: str, why: bool, cmd: str) -> bool:
         if earlier_failures:
             note = f"fixed — {earlier_failures} of the last {len(checks)} runs had failed"
             print(f"         {_dim(note)}")
+        _print_extra_active_runs(exclude_urls={latest.details_url})
         return True
 
     summary, tail = _fetch_failure_info([latest], why)[0]
@@ -141,6 +156,7 @@ def _print_ci_fallback(branch: str, why: bool, cmd: str) -> bool:
         print(f"         {_dim(f'{earlier_failures + 1} of the last {len(checks)} runs failed')}")
     if not why:
         _print_why_hint(cmd)
+    _print_extra_active_runs(exclude_urls={latest.details_url})
     return True
 
 
