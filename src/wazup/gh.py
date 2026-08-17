@@ -10,12 +10,15 @@ import subprocess
 import threading
 from dataclasses import dataclass
 from datetime import datetime
+from urllib.parse import urlparse
 
 _RUN_JOB_URL_RE = re.compile(r"/actions/runs/(\d+)/job/(\d+)")
 _RUN_URL_RE = re.compile(r"/actions/runs/(\d+)")
 _FAILED_CONCLUSIONS = {"failure", "timed_out", "startup_failure"}
 _LOG_LINE_RE = re.compile(r"^[^\t]*\t[^\t]*\t\S+Z\s?")
 _REMOTE_OWNER_RE = re.compile(r"github\.com[:/]([^/]+)/")
+_LOCK_URL_RE = re.compile(r'(?:url|registry)\s*=\s*"(https?://[^"]+)"')
+_PUBLIC_INDEX_HOSTS = {"pypi.org", "files.pythonhosted.org"}
 
 
 def is_orphaned_worktree_branch_name(name: str) -> bool:
@@ -158,6 +161,24 @@ def _login_matches_owner(login: str, owner: str) -> bool:
     return False
 
 
+@dataclass
+class GhAccount:
+    login: str
+    active: bool
+
+
+@functools.lru_cache(maxsize=None)
+def _github_accounts() -> tuple[GhAccount, ...]:
+    try:
+        data = _run_json(["gh", "auth", "status", "--json", "hosts"])
+    except WazupError:
+        return ()
+    return tuple(
+        GhAccount(login=a.get("login", ""), active=bool(a.get("active")))
+        for a in data.get("hosts", {}).get("github.com", [])
+    )
+
+
 def ensure_gh_account_for_repo() -> str | None:
     """If this repo's owner has a logged-in gh account that isn't active, switch to it.
 
@@ -173,23 +194,34 @@ def ensure_gh_account_for_repo() -> str | None:
     if owner is None:
         return None
 
-    try:
-        data = _run_json(["gh", "auth", "status", "--json", "hosts"])
-    except WazupError:
-        return None
-
-    accounts = data.get("hosts", {}).get("github.com", [])
     match = next(
-        (a for a in accounts if _login_matches_owner(a.get("login", ""), owner)), None
+        (a for a in _github_accounts() if _login_matches_owner(a.login, owner)), None
     )
-    if match is None or match.get("active"):
+    if match is None or match.active:
         return None
 
     try:
-        _run(["gh", "auth", "switch", "--hostname", "github.com", "--user", match["login"]])
+        _run(["gh", "auth", "switch", "--hostname", "github.com", "--user", match.login])
     except WazupError:
         return None
-    return f"switched active gh account to {match['login']} (owner of {owner}'s repos)"
+    _github_accounts.cache_clear()
+    return f"switched active gh account to {match.login} (owner of {owner}'s repos)"
+
+
+def active_account_is_personal() -> bool | None:
+    """Whether the currently active gh account is a personal identity
+    rather than a corporate SSO one — those are typically "name_OrgName"
+    (see `_login_matches_owner`), so a login with no "_" is the person's
+    own public GitHub account. None if it can't be determined (gh not
+    installed/authed). Free of any extra API call beyond `gh auth
+    status`, already needed for `ensure_gh_account_for_repo` — used as
+    the signal for whether "convenience" checks aimed at public personal
+    repos (leaked private-mirror URLs, etc.) are worth running.
+    """
+    active = next((a for a in _github_accounts() if a.active), None)
+    if active is None:
+        return None
+    return "_" not in active.login
 
 
 @dataclass
@@ -656,6 +688,26 @@ def failed_steps_summary(details_url: str | None) -> str | None:
         return job["name"]
     progress = f"stopped after {completed}/{len(all_steps)} steps"
     return f"{job['name']} ({progress}, {dur})" if dur else f"{job['name']} ({progress})"
+
+
+def uv_lock_private_mirrors(path: str = "uv.lock") -> list[str]:
+    """Hostnames in uv.lock's package/registry URLs that aren't public PyPI —
+    a sign the lock was resolved through a private/corporate mirror (e.g.
+    baked in via a global `~/.config/uv/uv.toml`) and would leak that
+    mirror's hostname if committed as-is. Empty (never raises) if the file
+    is missing or every URL is already public."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        return []
+
+    hosts = set()
+    for url in _LOCK_URL_RE.findall(text):
+        host = urlparse(url).hostname
+        if host and host not in _PUBLIC_INDEX_HOSTS:
+            hosts.add(host)
+    return sorted(hosts)
 
 
 def my_recent_prs(since: str) -> list[PullRequestSummary]:

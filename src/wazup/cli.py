@@ -269,6 +269,17 @@ def _print_all_clean_if(local_clean: bool, ci_ok: bool) -> None:
         print(_green("Everything is clean — nothing to do, no need to dig further."))
 
 
+def _print_public_repo_checks() -> None:
+    """Convenience checks that only make sense when we're operating as the
+    personal (non-corporate) gh account — see `gh.active_account_is_personal`
+    for why that, rather than a `gh repo view` visibility call, is the
+    signal used."""
+    if gh.active_account_is_personal() is not True:
+        return
+    for host in gh.uv_lock_private_mirrors():
+        print(f"check  {_yellow(f'uv.lock references a private index/mirror: {host}')}")
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     fetch_thread = gh.start_background_fetch()
     try:
@@ -280,6 +291,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 
     print(f"repo   {repo.name_with_owner}  ({repo.url})")
     print(f"branch {branch}" + (" (default)" if branch == repo.default_branch else ""))
+    _print_public_repo_checks()
     fetch_thread.join(timeout=5)  # cap the wait; a slow fetch just means stale ahead/behind
     local = gh.local_status()
     _print_local_status(local)
