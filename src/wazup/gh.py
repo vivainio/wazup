@@ -36,6 +36,48 @@ def current_branch() -> str:
     return _run(["git", "rev-parse", "--abbrev-ref", "HEAD"])
 
 
+@dataclass
+class ChangedFile:
+    status: str  # single-letter: M, A, D, R, C, U, ?
+    path: str
+
+
+@dataclass
+class LocalStatus:
+    ahead: int | None
+    is_dirty: bool
+    changed_files: list[ChangedFile]
+
+
+def local_status() -> LocalStatus:
+    """Unpushed-commit count (None if no upstream), working-tree cleanliness,
+    and the changed files themselves (staged, unstaged, and untracked)."""
+    try:
+        data = _run(["git", "status", "--porcelain=v2", "--branch"])
+    except WazupError:
+        return LocalStatus(ahead=None, is_dirty=False, changed_files=[])
+
+    ahead = None
+    changed: list[ChangedFile] = []
+    for line in data.splitlines():
+        if line.startswith("# branch.ab "):
+            ahead = int(line.split()[2].lstrip("+"))
+        elif line.startswith("1 "):
+            xy, path = line.split(" ", 8)[1], line.split(" ", 8)[8]
+            changed.append(ChangedFile(status=xy[0] if xy[0] != "." else xy[1], path=path))
+        elif line.startswith("2 "):
+            xy, rest = line.split(" ", 8)[1], line.split(" ", 8)[8]
+            path = rest.split("\t", 1)[0]
+            changed.append(ChangedFile(status=xy[0] if xy[0] != "." else xy[1], path=path))
+        elif line.startswith("u "):
+            path = line.split(" ", 10)[10]
+            changed.append(ChangedFile(status="U", path=path))
+        elif line.startswith("? "):
+            changed.append(ChangedFile(status="?", path=line[2:]))
+
+    return LocalStatus(ahead=ahead, is_dirty=bool(changed), changed_files=changed)
+
+
 def current_repo() -> RepoInfo | None:
     try:
         return repo_info()

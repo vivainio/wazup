@@ -91,6 +91,27 @@ def _print_recent_branches(exclude: str) -> None:
         print(f"       {b.name}  ({b.relative_date}){suffix}")
 
 
+_MAX_LISTED_CHANGED_FILES = 10
+
+
+def _print_local_status(status: gh.LocalStatus) -> None:
+    if status.ahead is None:
+        push_note = _dim("no upstream")
+    elif status.ahead > 0:
+        push_note = _yellow(f"{status.ahead} unpushed")
+    else:
+        push_note = _green("pushed")
+
+    tree_note = _red("dirty") if status.is_dirty else _green("clean")
+    print(f"local  {push_note}, {tree_note}")
+
+    if len(status.changed_files) > _MAX_LISTED_CHANGED_FILES:
+        print(f"       {len(status.changed_files)} files changed")
+    else:
+        for f in status.changed_files:
+            print(f"       {f.status} {f.path}")
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     try:
         repo = gh.repo_info()
@@ -101,6 +122,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 
     print(f"repo   {repo.name_with_owner}  ({repo.url})")
     print(f"branch {branch}" + (" (default)" if branch == repo.default_branch else ""))
+    _print_local_status(gh.local_status())
 
     pr = gh.pull_request_for_branch(branch)
     if pr is None:
