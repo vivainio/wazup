@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 
@@ -429,6 +430,122 @@ def cmd_review(args: argparse.Namespace) -> int:
     return 0
 
 
+def _wait_for_commit_runs(sha: str) -> tuple[list[gh.CheckRun], bool]:
+    """Poll `gh run list --commit <sha>` until every run on this exact
+    commit has completed. Mirrors the github-release skill's preflight wait
+    loop: a short poll while no run has appeared yet (Actions can take a
+    moment to register a run after a push), then a longer poll once
+    something is in flight. Returns (checks, found) — found is False if no
+    run for this commit ever showed up, so the caller can fall back to the
+    latest branch runs instead."""
+    runs: list[gh.WorkflowRun] = []
+    for attempt in range(30):
+        runs = gh.runs_for_commit(sha)
+        if not runs:
+            if attempt >= 5:
+                break
+            time.sleep(1)
+            continue
+        if all((r.status or "").lower() == "completed" for r in runs):
+            break
+        names = ", ".join(f"{r.name}={r.status}" for r in runs)
+        print(_dim(f"       waiting on CI: {names}"))
+        time.sleep(20)
+    checks = [gh.CheckRun(r.name, r.status, r.conclusion, r.url) for r in runs]
+    return checks, bool(runs)
+
+
+def cmd_release(args: argparse.Namespace) -> int:
+    try:
+        repo = gh.repo_info()
+        branch = gh.current_branch()
+    except gh.WazupError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"repo   {repo.name_with_owner}  ({repo.url})")
+
+    release_branch = args.target or repo.default_branch
+    if branch != release_branch:
+        override = "" if args.target else f" or rerun with `wazup release --target {branch}`"
+        print(
+            f"error: current branch is '{branch}', but release target is "
+            f"'{release_branch}'; check out '{release_branch}'{override}",
+            file=sys.stderr,
+        )
+        return 1
+    print(f"branch {branch}  (release target)")
+
+    try:
+        releases = gh.recent_releases()
+    except gh.WazupError:
+        releases = []
+    if releases:
+        print("releases")
+        for r in releases:
+            kind = " (draft)" if r.is_draft else " (prerelease)" if r.is_prerelease else ""
+            print(f"       {r.tag_name}{kind}  {r.published_at}")
+
+    # A blocking fetch (not the background one `cmd_status` uses) since the
+    # sync check below must be accurate, not just fast.
+    try:
+        gh.fetch_all()
+    except gh.WazupError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    local = gh.local_status()
+    _print_local_status(local)
+    if local.changed_files:
+        print(
+            "error: dirty worktree — commit or stash local changes first",
+            file=sys.stderr,
+        )
+        return 1
+    if local.ahead is None:
+        print(
+            f"error: no upstream tracking branch for '{branch}' — "
+            f"push with `git push -u origin {branch}` first",
+            file=sys.stderr,
+        )
+        return 1
+    if local.ahead:
+        print(
+            f"error: {local.ahead} unpushed commit(s) — "
+            f"push with `git push origin {branch}` first",
+            file=sys.stderr,
+        )
+        return 1
+    if local.behind:
+        print(
+            f"error: local branch is {local.behind} commit(s) behind "
+            f"origin/{branch} — pull/rebase first",
+            file=sys.stderr,
+        )
+        return 1
+
+    sha = gh.current_commit_sha()
+    checks, found = _wait_for_commit_runs(sha)
+    if not found:
+        print(f"ci     no run found for commit {sha[:12]}")
+        found_branch, ci_ok = _print_ci_fallback(branch, args.why, cmd="wazup release")
+        if not found_branch:
+            print(_yellow("ci: no CI runs found at all — proceed with judgement"))
+            print(_green("RELEASE PREFLIGHT PASS (no CI to verify)"))
+            return 0
+        if not ci_ok:
+            return 1
+        print(_green("RELEASE PREFLIGHT PASS"))
+        return 0
+
+    _print_checks(checks, cmd="wazup release", why=args.why)
+    if not _all_checks_passed(checks):
+        return 1
+
+    print(_green("RELEASE PREFLIGHT PASS"))
+    return 0
+
+
 def _add_why_flag(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "-w",
@@ -459,6 +576,17 @@ def build_parser() -> argparse.ArgumentParser:
         "review", help="list PRs awaiting your review, updated this week"
     )
     p_review.set_defaults(func=cmd_review)
+
+    p_release = sub.add_parser(
+        "release", help="preflight checks for cutting a release (branch, sync, CI)"
+    )
+    p_release.add_argument(
+        "--target",
+        metavar="BRANCH",
+        help="release branch to require instead of the repo's default branch",
+    )
+    p_release.set_defaults(func=cmd_release)
+    _add_why_flag(p_release)
 
     return parser
 

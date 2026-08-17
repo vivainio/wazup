@@ -55,6 +55,18 @@ def current_branch() -> str:
     return _run(["git", "rev-parse", "--abbrev-ref", "HEAD"])
 
 
+def current_commit_sha() -> str:
+    return _run(["git", "rev-parse", "HEAD"])
+
+
+def fetch_all() -> None:
+    """Blocking `git fetch --prune --tags`, for callers (release preflight)
+    that need the remote-tracking refs to be accurate before checking
+    ahead/behind — unlike `start_background_fetch`, which is fire-and-forget
+    best-effort freshness for a quick status glance."""
+    _run(["git", "fetch", "origin", "--prune", "--tags"])
+
+
 def is_linked_worktree() -> bool:
     """True if the current checkout is a linked worktree (`git worktree
     add`), not a repo's main checkout — the two share a common git dir but
@@ -491,6 +503,65 @@ def latest_runs_for_branch(branch: str, limit: int = 5) -> list[WorkflowRun]:
             status=r["status"],
             conclusion=r.get("conclusion"),
             url=r["url"],
+        )
+        for r in data
+    ]
+
+
+def runs_for_commit(sha: str, limit: int = 100) -> list[WorkflowRun]:
+    """Workflow runs whose head commit is exactly `sha` — used to gate a
+    release on CI for the precise commit being tagged, rather than "the
+    latest run on this branch" (which could predate a since-amended push).
+    `gh run list --commit` is filtered again here since it has been known
+    to return runs from other commits on some repos/tokens."""
+    data = _run_json(
+        [
+            "gh",
+            "run",
+            "list",
+            "--commit",
+            sha,
+            "--limit",
+            str(limit),
+            "--json",
+            "name,status,conclusion,url,headSha",
+        ]
+    )
+    return [
+        WorkflowRun(name=r["name"], status=r["status"], conclusion=r.get("conclusion"), url=r["url"])
+        for r in data
+        if r.get("headSha") == sha
+    ]
+
+
+@dataclass
+class ReleaseInfo:
+    tag_name: str
+    name: str
+    published_at: str | None
+    is_draft: bool
+    is_prerelease: bool
+
+
+def recent_releases(limit: int = 5) -> list[ReleaseInfo]:
+    data = _run_json(
+        [
+            "gh",
+            "release",
+            "list",
+            "--limit",
+            str(limit),
+            "--json",
+            "tagName,name,publishedAt,isDraft,isPrerelease",
+        ]
+    )
+    return [
+        ReleaseInfo(
+            tag_name=r["tagName"],
+            name=r.get("name") or r["tagName"],
+            published_at=r.get("publishedAt"),
+            is_draft=r["isDraft"],
+            is_prerelease=r["isPrerelease"],
         )
         for r in data
     ]
