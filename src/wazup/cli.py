@@ -209,4 +209,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
+
+    notice = gh.ensure_gh_account_for_repo()
+    if notice:
+        print(_dim(notice), file=sys.stderr)
+
     sys.exit(args.func(args))

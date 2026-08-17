@@ -9,6 +9,7 @@ from dataclasses import dataclass
 
 _RUN_JOB_URL_RE = re.compile(r"/actions/runs/(\d+)/job/(\d+)")
 _LOG_LINE_RE = re.compile(r"^[^\t]*\t[^\t]*\t\S+Z\s?")
+_REMOTE_OWNER_RE = re.compile(r"github\.com[:/]([^/]+)/")
 
 
 class WazupError(Exception):
@@ -38,6 +39,48 @@ def current_repo() -> RepoInfo | None:
         return repo_info()
     except WazupError:
         return None
+
+
+def _remote_owner() -> str | None:
+    try:
+        url = _run(["git", "remote", "get-url", "origin"])
+    except WazupError:
+        return None
+    match = _REMOTE_OWNER_RE.search(url)
+    return match.group(1) if match else None
+
+
+def ensure_gh_account_for_repo() -> str | None:
+    """If this repo's owner has a logged-in gh account that isn't active, switch to it.
+
+    The switch is permanent (persists across sessions, like running
+    `gh auth switch` by hand), not just for this invocation. Returns a
+    human-readable notice if a switch happened, else None. Never raises:
+    any failure (no remote, gh not installed, no matching account) is a
+    silent no-op, since this is a best-effort preflight, not a hard
+    requirement.
+    """
+    owner = _remote_owner()
+    if owner is None:
+        return None
+
+    try:
+        data = _run_json(["gh", "auth", "status", "--json", "hosts"])
+    except WazupError:
+        return None
+
+    accounts = data.get("hosts", {}).get("github.com", [])
+    match = next(
+        (a for a in accounts if a.get("login", "").lower() == owner.lower()), None
+    )
+    if match is None or match.get("active"):
+        return None
+
+    try:
+        _run(["gh", "auth", "switch", "--hostname", "github.com", "--user", match["login"]])
+    except WazupError:
+        return None
+    return f"switched active gh account to {match['login']} (owner of {owner}'s repos)"
 
 
 @dataclass
