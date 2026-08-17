@@ -253,6 +253,26 @@ def _print_local_status(status: gh.LocalStatus) -> None:
             print(f"       {f.status} {f.path}")
 
 
+def _print_worktree_note(repo: gh.RepoInfo, branch: str) -> None:
+    """For a linked worktree (not the repo's main checkout) on a non-default
+    branch, show how it stands against the default branch — the "ahead of
+    origin" figure in the `local` line is against this branch's own
+    upstream, if any, which says nothing about whether the work here has
+    already made it into main via a squash/rebase merge elsewhere."""
+    if branch == repo.default_branch or not gh.is_linked_worktree():
+        return
+    ahead = gh.commits_ahead_of(f"origin/{repo.default_branch}")
+    if ahead is None:
+        ahead = gh.commits_ahead_of(repo.default_branch)
+    if ahead is None:
+        return
+    if ahead == 0:
+        note = _dim(f"merged into {repo.default_branch}")
+    else:
+        note = _yellow(f"{ahead} commit{'s' if ahead != 1 else ''} not in {repo.default_branch}")
+    print(f"worktree  {note}")
+
+
 def _is_local_clean(status: gh.LocalStatus) -> bool:
     return not status.changed_files and not status.behind and not (status.ahead or 0)
 
@@ -295,6 +315,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     fetch_thread.join(timeout=5)  # cap the wait; a slow fetch just means stale ahead/behind
     local = gh.local_status()
     _print_local_status(local)
+    _print_worktree_note(repo, branch)
 
     pr = gh.pull_request_for_branch(branch)
     if pr is None:

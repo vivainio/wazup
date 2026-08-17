@@ -54,6 +54,29 @@ def current_branch() -> str:
     return _run(["git", "rev-parse", "--abbrev-ref", "HEAD"])
 
 
+def is_linked_worktree() -> bool:
+    """True if the current checkout is a linked worktree (`git worktree
+    add`), not a repo's main checkout — the two share a common git dir but
+    a linked worktree gets its own private one under
+    `<common>/worktrees/<name>`, so the two paths differ only there."""
+    try:
+        git_dir, common_dir = _run(
+            ["git", "rev-parse", "--git-dir", "--git-common-dir"]
+        ).splitlines()
+    except WazupError:
+        return False
+    return os.path.realpath(git_dir) != os.path.realpath(common_dir)
+
+
+def commits_ahead_of(ref: str) -> int | None:
+    """How many commits HEAD has that `ref` doesn't. None if `ref` doesn't
+    exist locally (e.g. no `origin/<branch>` without a fetch yet)."""
+    try:
+        return int(_run(["git", "rev-list", "--count", f"{ref}..HEAD"]))
+    except WazupError:
+        return None
+
+
 @dataclass
 class ChangedFile:
     status: str  # single-letter: M, A, D, R, C, U
