@@ -57,6 +57,12 @@ def _is_failed(c: gh.CheckRun) -> bool:
     }
 
 
+def _is_success(c: gh.CheckRun) -> bool:
+    conclusion = (c.conclusion or "").upper()
+    status = (c.status or "").upper()
+    return conclusion == "SUCCESS" or status == "SUCCESS"
+
+
 def _fetch_failure_info(
     checks: list[gh.CheckRun], why: bool
 ) -> list[tuple[str | None, str | None]]:
@@ -125,27 +131,35 @@ def _print_extra_active_runs(exclude_urls: set[str | None]) -> None:
         print(f"       {_check_icon(r.conclusion, r.status)} {r.name}  {r.url}")
 
 
-def _print_ci_fallback(branch: str, why: bool, cmd: str) -> bool:
+def _print_ci_fallback(branch: str, why: bool, cmd: str) -> tuple[bool, bool]:
     """CI status for a branch with no open PR, from its latest workflow
     runs — this is what `pr.checks` would show if there were a PR to attach
-    to. Returns whether any runs were found."""
+    to. Returns (found, passed): whether any runs were found, and whether
+    the latest one succeeded."""
     runs = gh.latest_runs_for_branch(branch, limit=10)
     if not runs:
-        return False
+        return False, False
 
     checks = [gh.CheckRun(r.name, r.status, r.conclusion, r.url) for r in runs]
     latest = checks[0]
     earlier_failures = sum(1 for c in checks[1:] if _is_failed(c))
 
     print("ci")
-    print(f"       {_check_icon(latest.conclusion, latest.status)} {latest.name}  {latest.details_url}")
+    icon = _check_icon(latest.conclusion, latest.status)
+    if _is_success(latest):
+        # a clean pass needs no link — the URL only earns its keep when
+        # there's something to click through to (a failure, or a run still
+        # in flight worth watching)
+        print(f"       {icon} {latest.name}")
+    else:
+        print(f"       {icon} {latest.name}  {latest.details_url}")
 
     if not _is_failed(latest):
         if earlier_failures:
             note = f"fixed — {earlier_failures} of the last {len(checks)} runs had failed"
             print(f"         {_dim(note)}")
         _print_extra_active_runs(exclude_urls={latest.details_url})
-        return True
+        return True, _is_success(latest)
 
     summary, tail = _fetch_failure_info([latest], why)[0]
     if summary:
@@ -157,7 +171,7 @@ def _print_ci_fallback(branch: str, why: bool, cmd: str) -> bool:
     if not why:
         _print_why_hint(cmd)
     _print_extra_active_runs(exclude_urls={latest.details_url})
-    return True
+    return True, False
 
 
 def _display_path(path: str) -> str:
@@ -234,6 +248,22 @@ def _print_local_status(status: gh.LocalStatus) -> None:
             print(f"       {f.status} {f.path}")
 
 
+def _is_local_clean(status: gh.LocalStatus) -> bool:
+    return not status.changed_files and not status.behind and not (status.ahead or 0)
+
+
+def _all_checks_passed(checks: list[gh.CheckRun]) -> bool:
+    return bool(checks) and all(_is_success(c) for c in checks)
+
+
+def _print_all_clean_if(local_clean: bool, ci_ok: bool) -> None:
+    # An explicit, imperative line rather than a bare status word — an AI
+    # agent parsing this output should be able to stop analyzing right here
+    # without re-deriving "clean" from the local/ci lines above.
+    if local_clean and ci_ok:
+        print(_green("Everything is clean — nothing to do, no need to dig further."))
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     fetch_thread = gh.start_background_fetch()
     try:
@@ -246,19 +276,21 @@ def cmd_status(args: argparse.Namespace) -> int:
     print(f"repo   {repo.name_with_owner}  ({repo.url})")
     print(f"branch {branch}" + (" (default)" if branch == repo.default_branch else ""))
     fetch_thread.join(timeout=5)  # cap the wait; a slow fetch just means stale ahead/behind
-    _print_local_status(gh.local_status())
+    local = gh.local_status()
+    _print_local_status(local)
 
     pr = gh.pull_request_for_branch(branch)
     if pr is None:
         print("pr     none")
         try:
-            found = _print_ci_fallback(branch, args.why, cmd="wazup")
+            found, ci_ok = _print_ci_fallback(branch, args.why, cmd="wazup")
         except gh.WazupError:
-            found = False
+            found, ci_ok = False, False
         if not found:
             print("ci     none")
         if branch == repo.default_branch:
             _print_recent_branches(current_branch=branch)
+        _print_all_clean_if(local_clean=_is_local_clean(local), ci_ok=found and ci_ok)
         return 0
 
     state = pr.state.lower() + (" (draft)" if pr.is_draft else "")
@@ -268,6 +300,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         print(f"review {pr.review_decision.replace('_', ' ').lower()}")
 
     _print_checks(pr.checks, cmd="wazup", why=args.why)
+    _print_all_clean_if(local_clean=_is_local_clean(local), ci_ok=_all_checks_passed(pr.checks))
     return 0
 
 
@@ -286,7 +319,7 @@ def cmd_ci(args: argparse.Namespace) -> int:
 
     print(f"branch {branch}  (no open PR)")
     try:
-        found = _print_ci_fallback(branch, args.why, cmd="wazup ci")
+        found, _ci_ok = _print_ci_fallback(branch, args.why, cmd="wazup ci")
     except gh.WazupError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
