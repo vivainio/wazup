@@ -25,6 +25,14 @@ wazup also keeps the active `gh` account in sync with whichever repo you're
 in, switching it (permanently, like running `gh auth switch` by hand) when
 the repo's owner doesn't match.
 
+## Usage in an AI coding client
+
+wazup is built to be run straight from an AI coding assistant (e.g. Claude
+Code) via its shell-passthrough, like `!wazup`. Running the single command
+gets the assistant repo/branch/PR/CI status in one shot, instead of it
+making several separate `gh`/`git` calls and spending tokens piecing the
+results together itself.
+
 ## Install
 
 ```
