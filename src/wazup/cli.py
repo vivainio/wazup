@@ -82,24 +82,30 @@ def _display_path(path: str) -> str:
     return "~" + path[len(home) :] if path.startswith(home) else path
 
 
-def _print_recent_branches(exclude: str) -> None:
-    branches = gh.recent_local_branches(limit=8, exclude=exclude)
-    if not branches:
-        return
-    prs = gh.open_prs_by_branch()
+def _pr_suffix(prs: dict[str, gh.BranchPr], branch: str) -> str:
+    pr = prs.get(branch)
+    if not pr:
+        return ""
+    draft = " draft" if pr.is_draft else ""
+    return f"  {_green(f'PR #{pr.number}{draft}')}"
+
+
+def _print_recent_branches(current_branch: str) -> None:
     worktrees = gh.worktree_branches()
-    print("recent branches")
-    for b in branches:
-        pr = prs.get(b.name)
-        pr_suffix = ""
-        if pr:
-            draft = " draft" if pr.is_draft else ""
-            pr_suffix = f"  {_green(f'PR #{pr.number}{draft}')}"
+    branches = gh.recent_local_branches(limit=8, exclude={current_branch, *worktrees})
+    prs = gh.open_prs_by_branch()
 
-        wt_path = worktrees.get(b.name)
-        wt_suffix = f"  {_dim(f'[worktree: {_display_path(wt_path)}]')}" if wt_path else ""
+    if branches:
+        print("recent branches")
+        for b in branches:
+            print(f"       {b.name}  ({b.relative_date}){_pr_suffix(prs, b.name)}")
 
-        print(f"       {b.name}  ({b.relative_date}){pr_suffix}{wt_suffix}")
+    worktree_entries = gh.worktree_info(exclude_branch=current_branch)
+    if worktree_entries:
+        print("worktrees")
+        for w in worktree_entries:
+            path = _dim(_display_path(w.path))
+            print(f"       {w.branch}  ({w.relative_date})  {path}{_pr_suffix(prs, w.branch)}")
 
 
 _MAX_LISTED_CHANGED_FILES = 10
@@ -142,7 +148,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     if pr is None:
         print("pr     none")
         if branch == repo.default_branch:
-            _print_recent_branches(exclude=branch)
+            _print_recent_branches(current_branch=branch)
         return 0
 
     state = pr.state.lower() + (" (draft)" if pr.is_draft else "")

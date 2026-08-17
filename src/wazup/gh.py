@@ -147,7 +147,8 @@ class BranchInfo:
     relative_date: str
 
 
-def recent_local_branches(limit: int = 8, exclude: str | None = None) -> list[BranchInfo]:
+def recent_local_branches(limit: int = 8, exclude: set[str] | None = None) -> list[BranchInfo]:
+    exclude = exclude or set()
     try:
         data = _run(
             [
@@ -156,7 +157,7 @@ def recent_local_branches(limit: int = 8, exclude: str | None = None) -> list[Br
                 "refs/heads/",
                 "--sort=-committerdate",
                 "--format=%(refname:short)\t%(committerdate:relative)",
-                f"--count={limit + 1}",
+                f"--count={limit + len(exclude) + 1}",
             ]
         )
     except WazupError:
@@ -165,7 +166,7 @@ def recent_local_branches(limit: int = 8, exclude: str | None = None) -> list[Br
     branches = []
     for line in data.splitlines():
         name, _, relative_date = line.partition("\t")
-        if name and name != exclude:
+        if name and name not in exclude:
             branches.append(BranchInfo(name=name, relative_date=relative_date))
     return branches[:limit]
 
@@ -186,6 +187,31 @@ def worktree_branches() -> dict[str, str]:
         elif line.startswith("branch refs/heads/") and path is not None:
             result[line[len("branch refs/heads/") :]] = path
     return result
+
+
+@dataclass
+class WorktreeInfo:
+    branch: str
+    path: str
+    relative_date: str
+
+
+def worktree_info(exclude_branch: str) -> list[WorktreeInfo]:
+    """Other worktrees' branches, most recently committed to first."""
+    entries: list[tuple[int, WorktreeInfo]] = []
+    for branch, path in worktree_branches().items():
+        if branch == exclude_branch:
+            continue
+        try:
+            data = _run(["git", "log", "-1", "--format=%ct\t%cr", branch])
+        except WazupError:
+            continue
+        timestamp, _, relative_date = data.partition("\t")
+        entries.append(
+            (int(timestamp), WorktreeInfo(branch=branch, path=path, relative_date=relative_date))
+        )
+    entries.sort(key=lambda e: e[0], reverse=True)
+    return [w for _, w in entries]
 
 
 @dataclass
