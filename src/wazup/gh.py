@@ -164,7 +164,7 @@ def local_status() -> LocalStatus:
             xy, path = line.split(" ", 8)[1], line.split(" ", 8)[8]
             changed.append(ChangedFile(status=xy[0] if xy[0] != "." else xy[1], path=path))
         elif line.startswith("2 "):
-            xy, rest = line.split(" ", 8)[1], line.split(" ", 8)[8]
+            xy, rest = line.split(" ", 9)[1], line.split(" ", 9)[9]
             path = rest.split("\t", 1)[0]
             changed.append(ChangedFile(status=xy[0] if xy[0] != "." else xy[1], path=path))
         elif line.startswith("u "):
