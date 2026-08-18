@@ -17,7 +17,7 @@ _RUN_JOB_URL_RE = re.compile(r"/actions/runs/(\d+)/job/(\d+)")
 _RUN_URL_RE = re.compile(r"/actions/runs/(\d+)")
 _FAILED_CONCLUSIONS = {"failure", "timed_out", "startup_failure"}
 _LOG_LINE_RE = re.compile(r"^[^\t]*\t[^\t]*\t\S+Z\s?")
-_REMOTE_OWNER_RE = re.compile(r"github\.com[:/]([^/]+)/")
+_REMOTE_OWNER_RE = re.compile(r"[:/]([^/:@]+)/[^/]+/?$")
 _LOCK_URL_RE = re.compile(r'(?:url|registry)\s*=\s*"(https?://[^"]+)"')
 _PUBLIC_INDEX_HOSTS = {"pypi.org", "files.pythonhosted.org"}
 
@@ -186,6 +186,14 @@ def current_repo() -> RepoInfo | None:
 
 
 def _remote_owner() -> str | None:
+    """The owner segment of origin's "owner/repo" path, whatever the host —
+    an SSH config alias (`git@github-personal:owner/repo.git`, used to force
+    a specific identity file) doesn't literally say "github.com", so this
+    doesn't check the host at all. It doesn't need to: the result is only
+    ever matched against already-GitHub-scoped `gh auth status` logins
+    (`ensure_gh_account_for_repo`), so a non-GitHub remote just fails to
+    match anything downstream.
+    """
     try:
         url = _run(["git", "remote", "get-url", "origin"])
     except WazupError:
