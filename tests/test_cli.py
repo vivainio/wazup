@@ -274,6 +274,72 @@ def test_review_command_lists_prs_awaiting_review(fake_cli, capsys):
     assert "vivainio/other  #9 Needs eyes" in out
 
 
+def test_status_hints_fixup_uv_lock_for_a_leaked_mirror(fake_cli, capsys, tmp_path):
+    (tmp_path / "uv.lock").write_text(
+        'source = { registry = "https://pypi-mirror.example.com/simple" }\n'
+    )
+    _register_repo(fake_cli)
+    fake_cli.set(_BRANCH_CMD, stdout="main")
+    fake_cli.set(["git", "fetch"], stdout="")
+    fake_cli.set(_AUTH_STATUS_CMD, stdout=json.dumps({
+        "hosts": {"github.com": [{"login": "vivainio", "active": True}]}
+    }))
+    fake_cli.set(_STATUS_CMD, stdout="# branch.ab +0 -0\n")
+    fake_cli.set(
+        ["gh", "pr", "view", "main", "--json",
+         "number,title,url,state,isDraft,reviewDecision,statusCheckRollup"],
+        returncode=1, stderr="no pull requests found",
+    )
+    fake_cli.set(
+        ["gh", "run", "list", "--branch", "main", "--limit", "10", "--json",
+         "name,status,conclusion,url"],
+        stdout="[]",
+    )
+    fake_cli.set(["git", "worktree", "list", "--porcelain"], stdout="")
+    fake_cli.set(
+        ["git", "for-each-ref", "refs/heads/", "--sort=-committerdate",
+         "--format=%(refname:short)\t%(committerdate:relative)"],
+        stdout="",
+    )
+    fake_cli.set(
+        ["gh", "pr", "list", "--json", "number,url,state,isDraft,headRefName", "--limit", "100"],
+        stdout="[]",
+    )
+
+    exit_code = _run_cli([])
+
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "uv.lock references a private index/mirror: pypi-mirror.example.com" in out
+    assert "fix with `wazup fixup uv-lock`" in out
+
+
+def test_fixup_uv_lock_rewrites_the_lockfile(capsys, tmp_path):
+    lock = tmp_path / "uv.lock"
+    lock.write_text(
+        'source = { registry = "https://pypi-mirror.example.com/simple" }\n'
+        'sdist = { url = "https://pypi-mirror.example.com/packages/foo.tar.gz" }\n'
+    )
+
+    exit_code = _run_cli(["fixup", "uv-lock"])
+
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "rewrote uv.lock: pypi-mirror.example.com -> pypi.org / files.pythonhosted.org" in out
+    text = lock.read_text()
+    assert "pypi-mirror.example.com" not in text
+    assert "https://pypi.org/simple" in text
+
+
+def test_fixup_uv_lock_noop_when_already_public(capsys, tmp_path):
+    (tmp_path / "uv.lock").write_text('source = { registry = "https://pypi.org/simple" }\n')
+
+    exit_code = _run_cli(["fixup", "uv-lock"])
+
+    assert exit_code == 0
+    assert "nothing to fix" in capsys.readouterr().out
+
+
 def _review_search_cmd() -> list[str]:
     from datetime import date, timedelta
 

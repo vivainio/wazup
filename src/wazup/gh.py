@@ -20,6 +20,7 @@ _LOG_LINE_RE = re.compile(r"^[^\t]*\t[^\t]*\t\S+Z\s?")
 _REMOTE_OWNER_RE = re.compile(r"[:/]([^/:@]+)/[^/]+/?$")
 _LOCK_URL_RE = re.compile(r'(?:url|registry)\s*=\s*"(https?://[^"]+)"')
 _PUBLIC_INDEX_HOSTS = {"pypi.org", "files.pythonhosted.org"}
+_LOCK_REGISTRY_RE = re.compile(r'registry = "(https://[^"]+)/simple"')
 
 
 def is_orphaned_worktree_branch_name(name: str) -> bool:
@@ -896,6 +897,43 @@ def uv_lock_private_mirrors(path: str = "uv.lock") -> list[str]:
         if host and host not in _PUBLIC_INDEX_HOSTS:
             hosts.add(host)
     return sorted(hosts)
+
+
+def fix_uv_lock_mirror(path: str = "uv.lock") -> str | None:
+    """Rewrite uv.lock's registry/package URLs from a private index/mirror
+    back to public PyPI (pypi.org / files.pythonhosted.org). Returns the
+    mirror hostname that was replaced, or None if the file is missing or
+    already points at the public index — never raises.
+
+    This is a one-shot undo, not a lasting fix: a later `uv lock` / `uv
+    sync` / `uv add` re-resolves against whatever index is configured
+    (typically a corporate-default `~/.config/uv/uv.toml`) and will
+    silently reintroduce the mirror, so this needs rerunning after that.
+    """
+    try:
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        return None
+
+    match = _LOCK_REGISTRY_RE.search(text)
+    if not match:
+        return None
+    prefix = match.group(1)
+    host = urlparse(prefix).hostname
+    if not host or host in _PUBLIC_INDEX_HOSTS:
+        return None
+
+    text = text.replace(f"{prefix}/simple", "https://pypi.org/simple")
+    text = text.replace(f"{prefix}/packages/", "https://files.pythonhosted.org/packages/")
+    # some mirrors (e.g. Artifactory) double the packages/ segment in file URLs
+    text = text.replace(
+        "files.pythonhosted.org/packages/packages/", "files.pythonhosted.org/packages/"
+    )
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
+    return host
 
 
 def my_recent_prs(since: str) -> list[PullRequestSummary]:

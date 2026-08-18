@@ -25,6 +25,13 @@ wazup also keeps the active `gh` account in sync with whichever repo you're
 in, switching it (permanently, like running `gh auth switch` by hand) when
 the repo's owner doesn't match.
 
+If `wazup` flags `uv.lock` as pointing at a private index/mirror (e.g. a
+corporate PyPI proxy baked in via `~/.config/uv/uv.toml`) instead of public
+PyPI, run `wazup fixup uv-lock` to rewrite it back to `pypi.org` /
+`files.pythonhosted.org` — a plain `uv lock` re-resolves against the same
+mirror and just reintroduces the leak, so rerun the fixup after that if
+needed.
+
 ## Usage in an AI coding client
 
 wazup is built to be run straight from an AI coding assistant (e.g. Claude

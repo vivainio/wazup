@@ -358,6 +358,10 @@ def _print_public_repo_checks() -> None:
         return
     for host in gh.uv_lock_private_mirrors():
         print(f"check  {_yellow(f'uv.lock references a private index/mirror: {host}')}")
+        # `uv lock` re-resolves against the same (corporate-default) index and
+        # just reintroduces the leak, so it isn't the fix — a search-and-
+        # replace back to the public host is, and `fixup uv-lock` is that.
+        print(f"       {_dim('fix with `wazup fixup uv-lock` (running `uv lock` again will re-add it)')}")
 
 
 def cmd_status(args: argparse.Namespace) -> int:
@@ -464,6 +468,16 @@ def cmd_review(args: argparse.Namespace) -> int:
     except gh.WazupError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+    return 0
+
+
+def cmd_fixup_uv_lock(args: argparse.Namespace) -> int:
+    host = gh.fix_uv_lock_mirror()
+    if host is None:
+        print("uv.lock already points at the public index — nothing to fix")
+        return 0
+    print(_green(f"rewrote uv.lock: {host} -> pypi.org / files.pythonhosted.org"))
+    print(_dim("a later `uv lock`/`uv sync`/`uv add` will re-add the mirror — rerun this after that"))
     return 0
 
 
@@ -626,6 +640,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_release.set_defaults(func=cmd_release)
     _add_why_flag(p_release)
+
+    p_fixup = sub.add_parser("fixup", help="fix issues wazup's checks flagged")
+    fixup_sub = p_fixup.add_subparsers(dest="fixup_target", required=True)
+    p_fixup_uv_lock = fixup_sub.add_parser(
+        "uv-lock", help="rewrite uv.lock's private index/mirror URLs back to public pypi.org"
+    )
+    p_fixup_uv_lock.set_defaults(func=cmd_fixup_uv_lock)
 
     return parser
 
