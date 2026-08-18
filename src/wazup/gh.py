@@ -489,6 +489,7 @@ class WorkflowRun:
     conclusion: str | None
     url: str
     created_at: str | None = None
+    head_sha: str | None = None
 
 
 def latest_runs_for_branch(branch: str, limit: int = 5) -> list[WorkflowRun]:
@@ -502,7 +503,7 @@ def latest_runs_for_branch(branch: str, limit: int = 5) -> list[WorkflowRun]:
             "--limit",
             str(limit),
             "--json",
-            "name,status,conclusion,url",
+            "name,status,conclusion,url,headSha",
         ]
     )
     return [
@@ -511,6 +512,7 @@ def latest_runs_for_branch(branch: str, limit: int = 5) -> list[WorkflowRun]:
             status=r["status"],
             conclusion=r.get("conclusion"),
             url=r["url"],
+            head_sha=r.get("headSha"),
         )
         for r in data
     ]
@@ -612,7 +614,7 @@ def recent_other_runs(limit: int = 20) -> list[WorkflowRun]:
             "--limit",
             str(limit),
             "--json",
-            "name,status,conclusion,url,createdAt",
+            "name,status,conclusion,url,createdAt,headSha",
         ]
     )
     cutoff = datetime.now(timezone.utc) - timedelta(seconds=_RECENT_OTHER_RUN_WINDOW_SECONDS)
@@ -629,6 +631,7 @@ def recent_other_runs(limit: int = 20) -> list[WorkflowRun]:
                 conclusion=r.get("conclusion"),
                 url=r["url"],
                 created_at=r.get("createdAt"),
+                head_sha=r.get("headSha"),
             )
         )
     return runs

@@ -98,7 +98,11 @@ def _print_why_hint(cmd: str) -> None:
     print(f"       {_dim(f'run `{cmd} --why` to see the failing log')}")
 
 
-def _print_checks(checks: list[gh.CheckRun], cmd: str, why: bool = False) -> None:
+def _print_checks(checks: list[gh.CheckRun], cmd: str, why: bool = False) -> bool:
+    """Prints the check list; returns whether the *other*, unlisted repo
+    workflow runs shown alongside it are also clean (see
+    _print_recent_other_runs) — combine with _all_checks_passed(checks) for
+    the overall verdict."""
     if not checks:
         print("ci     no checks reported")
     else:
@@ -116,23 +120,43 @@ def _print_checks(checks: list[gh.CheckRun], cmd: str, why: bool = False) -> Non
                     _print_failure_detail(c, tail)
         if failed and not why:
             _print_why_hint(cmd)
-    _print_recent_other_runs(
+    return _print_recent_other_runs(
         exclude_names={c.name for c in checks},
         exclude_urls={c.details_url for c in checks},
     )
 
 
-def _print_recent_other_runs(exclude_names: set[str], exclude_urls: set[str | None]) -> None:
+def _staleness_note(head_sha: str | None) -> str | None:
+    """None if a run's commit is HEAD (or its distance from HEAD can't be
+    determined locally); otherwise a note that it predates HEAD by N
+    commits — e.g. a path-filtered workflow (docs, release) whose last run
+    is several commits behind because nothing since has touched its paths,
+    so a failure shown here may already be moot."""
+    if not head_sha:
+        return None
+    behind = gh.commits_ahead_of(head_sha)
+    if not behind:
+        return None
+    return _dim(
+        f"stale — ran on {head_sha[:7]}, {behind} commit{'s' if behind != 1 else ''} "
+        "behind HEAD; may already be fixed"
+    )
+
+
+def _print_recent_other_runs(exclude_names: set[str], exclude_urls: set[str | None]) -> bool:
     """Other workflows' runs elsewhere in the repo — still active, or
     completed within the last hour — that weren't already shown above.
     E.g. a release-triggered publish workflow, invisible to the
     branch-scoped CI lookup since it isn't scoped to this branch. Only the
-    most recent run per workflow name is shown."""
+    most recent run per workflow name is shown. Returns False if any shown
+    run has failed, so callers can fold it into their "clean" verdict
+    instead of it only ever being a footnote."""
     try:
         runs = gh.recent_other_runs()
     except gh.WazupError:
-        return
+        return True
     seen: set[str] = set()
+    ok = True
     for r in runs:
         if r.name in exclude_names or r.url in exclude_urls or r.name in seen:
             continue
@@ -146,6 +170,12 @@ def _print_recent_other_runs(exclude_names: set[str], exclude_urls: set[str | No
             print(f"       {icon} {r.name}{suffix}")
         else:
             print(f"       {icon} {r.name}  {r.url}")
+            if _is_failed(gh.CheckRun(r.name, r.status, r.conclusion, r.url)):
+                ok = False
+                note = _staleness_note(r.head_sha)
+                if note:
+                    print(f"         {note}")
+    return ok
 
 
 def _print_ci_fallback(branch: str, why: bool, cmd: str) -> tuple[bool, bool]:
@@ -175,14 +205,19 @@ def _print_ci_fallback(branch: str, why: bool, cmd: str) -> tuple[bool, bool]:
         if earlier_failures:
             note = f"fixed — {earlier_failures} of the last {len(checks)} runs had failed"
             print(f"         {_dim(note)}")
-        _print_recent_other_runs(exclude_names={latest.name}, exclude_urls={latest.details_url})
-        return True, _is_success(latest)
+        other_ok = _print_recent_other_runs(
+            exclude_names={latest.name}, exclude_urls={latest.details_url}
+        )
+        return True, _is_success(latest) and other_ok
 
     summary, tail = _fetch_failure_info([latest], why)[0]
     if summary:
         print(f"         {_dim(summary)}")
     if why:
         _print_failure_detail(latest, tail)
+    stale = _staleness_note(runs[0].head_sha)
+    if stale:
+        print(f"         {stale}")
     if earlier_failures:
         print(f"         {_dim(f'{earlier_failures + 1} of the last {len(checks)} runs failed')}")
     if not why:
@@ -362,8 +397,10 @@ def cmd_status(args: argparse.Namespace) -> int:
     if pr.review_decision:
         print(f"review {pr.review_decision.replace('_', ' ').lower()}")
 
-    _print_checks(pr.checks, cmd="wazup", why=args.why)
-    _print_all_clean_if(local_clean=_is_local_clean(local), ci_ok=_all_checks_passed(pr.checks))
+    other_ok = _print_checks(pr.checks, cmd="wazup", why=args.why)
+    _print_all_clean_if(
+        local_clean=_is_local_clean(local), ci_ok=_all_checks_passed(pr.checks) and other_ok
+    )
     return 0
 
 
