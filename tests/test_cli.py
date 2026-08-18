@@ -55,7 +55,7 @@ def test_status_clean_repo_no_pr_no_ci(fake_cli, capsys):
     )
     fake_cli.set(
         ["gh", "run", "list", "--branch", "main", "--limit", "10", "--json",
-         "name,status,conclusion,url"],
+         "name,status,conclusion,url,headSha"],
         stdout="[]",
     )
     fake_cli.set(["git", "worktree", "list", "--porcelain"], stdout="")
@@ -115,7 +115,7 @@ def test_status_dirty_repo_with_open_pr_and_failing_check(fake_cli, capsys):
         ]}),
     )
     fake_cli.set(
-        ["gh", "run", "list", "--limit", "20", "--json", "name,status,conclusion,url,createdAt"],
+        ["gh", "run", "list", "--limit", "20", "--json", "name,status,conclusion,url,createdAt,headSha"],
         stdout="[]",
     )
     fake_cli.set(
@@ -144,14 +144,14 @@ def test_ci_command_no_pr_falls_back_to_branch_runs(fake_cli, capsys):
     )
     fake_cli.set(
         ["gh", "run", "list", "--branch", "feature-x", "--limit", "10", "--json",
-         "name,status,conclusion,url"],
+         "name,status,conclusion,url,headSha"],
         stdout=json.dumps([
             {"name": "CI", "status": "COMPLETED", "conclusion": "SUCCESS",
              "url": "https://github.com/vivainio/wazup/actions/runs/1"},
         ]),
     )
     fake_cli.set(
-        ["gh", "run", "list", "--limit", "20", "--json", "name,status,conclusion,url,createdAt"],
+        ["gh", "run", "list", "--limit", "20", "--json", "name,status,conclusion,url,createdAt,headSha"],
         stdout="[]",
     )
 
@@ -216,7 +216,7 @@ def test_release_preflight_passes_when_ci_green(fake_cli, capsys):
         ]),
     )
     fake_cli.set(
-        ["gh", "run", "list", "--limit", "20", "--json", "name,status,conclusion,url,createdAt"],
+        ["gh", "run", "list", "--limit", "20", "--json", "name,status,conclusion,url,createdAt,headSha"],
         stdout="[]",
     )
 
@@ -292,7 +292,7 @@ def test_status_hints_fixup_uv_lock_for_a_leaked_mirror(fake_cli, capsys, tmp_pa
     )
     fake_cli.set(
         ["gh", "run", "list", "--branch", "main", "--limit", "10", "--json",
-         "name,status,conclusion,url"],
+         "name,status,conclusion,url,headSha"],
         stdout="[]",
     )
     fake_cli.set(["git", "worktree", "list", "--porcelain"], stdout="")

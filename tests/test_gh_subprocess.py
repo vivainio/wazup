@@ -280,7 +280,7 @@ def test_recent_other_runs_excludes_old_completed_runs(fake_cli):
     old = (now - timedelta(hours=2)).isoformat().replace("+00:00", "Z")
 
     fake_cli.set(
-        ["gh", "run", "list", "--limit", "20", "--json", "name,status,conclusion,url,createdAt"],
+        ["gh", "run", "list", "--limit", "20", "--json", "name,status,conclusion,url,createdAt,headSha"],
         stdout=json.dumps([
             {"name": "recent-pass", "status": "completed", "conclusion": "success", "url": "https://x/1", "createdAt": recent},
             {"name": "old-pass", "status": "completed", "conclusion": "success", "url": "https://x/2", "createdAt": old},
