@@ -314,7 +314,8 @@ def _print_worktree_note(repo: gh.RepoInfo, branch: str, local: gh.LocalStatus) 
     if branch == repo.default_branch or not gh.is_linked_worktree():
         return
     origin_ref = f"origin/{repo.default_branch}"
-    ahead = gh.commits_ahead_of(origin_ref)
+    ahead_origin = gh.commits_ahead_of(origin_ref)
+    ahead = ahead_origin
     ref_label = origin_ref
     if ahead is None:
         ahead = gh.commits_ahead_of(repo.default_branch)
@@ -322,6 +323,16 @@ def _print_worktree_note(repo: gh.RepoInfo, branch: str, local: gh.LocalStatus) 
     if ahead is None:
         return
     if ahead > 0:
+        # It may still be fully merged locally (e.g. a local ff-merge that
+        # hasn't been pushed) even though origin/main doesn't have it yet —
+        # worth saying so instead of just "not in origin/main", since that
+        # alone reads as unmerged work rather than an unpushed merge.
+        if ahead_origin is not None and ahead_origin > 0:
+            ahead_local = gh.commits_ahead_of(repo.default_branch)
+            if ahead_local == 0:
+                note = _yellow(f"merged into local {repo.default_branch}, not pushed to {origin_ref}")
+                print(f"worktree  {note}")
+                return
         note = _yellow(f"{ahead} commit{'s' if ahead != 1 else ''} not in {ref_label}")
         print(f"worktree  {note}")
         return

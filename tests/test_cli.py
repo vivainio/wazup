@@ -349,3 +349,60 @@ def _review_search_cmd() -> list[str]:
         "--updated", f">={since}", "--sort", "updated", "--json",
         "number,title,url,state,isDraft,updatedAt,repository",
     ]
+
+
+def _repo(default_branch="main"):
+    return cli.gh.RepoInfo(
+        name_with_owner="vivainio/wazup",
+        url="https://github.com/vivainio/wazup",
+        default_branch=default_branch,
+    )
+
+
+def _local_status():
+    return cli.gh.LocalStatus(ahead=None, behind=None, changed_files=[], untracked_count=0)
+
+
+def test_worktree_note_flags_a_local_merge_not_yet_pushed(monkeypatch, capsys):
+    # Simulates a branch that's fully caught up with local main (e.g. via a
+    # manual ff-merge) but hasn't been pushed, so origin/main still lacks it.
+    monkeypatch.setattr(cli.gh, "is_linked_worktree", lambda: True)
+    monkeypatch.setattr(
+        cli.gh,
+        "commits_ahead_of",
+        lambda ref: {"origin/main": 1, "main": 0}[ref],
+    )
+
+    cli._print_worktree_note(_repo(), "feature", _local_status())
+
+    out = capsys.readouterr().out
+    assert "merged into local main, not pushed to origin/main" in out
+    assert "not in origin/main" not in out
+
+
+def test_worktree_note_reports_genuinely_unmerged_work(monkeypatch, capsys):
+    monkeypatch.setattr(cli.gh, "is_linked_worktree", lambda: True)
+    monkeypatch.setattr(
+        cli.gh,
+        "commits_ahead_of",
+        lambda ref: {"origin/main": 2, "main": 2}[ref],
+    )
+
+    cli._print_worktree_note(_repo(), "feature", _local_status())
+
+    out = capsys.readouterr().out
+    assert "2 commits not in origin/main" in out
+
+
+def test_worktree_note_falls_back_to_local_main_without_a_fetched_origin(monkeypatch, capsys):
+    monkeypatch.setattr(cli.gh, "is_linked_worktree", lambda: True)
+    monkeypatch.setattr(
+        cli.gh,
+        "commits_ahead_of",
+        lambda ref: {"origin/main": None, "main": 3}[ref],
+    )
+
+    cli._print_worktree_note(_repo(), "feature", _local_status())
+
+    out = capsys.readouterr().out
+    assert "3 commits not in local main" in out
