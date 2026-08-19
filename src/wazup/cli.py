@@ -313,17 +313,20 @@ def _print_worktree_note(repo: gh.RepoInfo, branch: str, local: gh.LocalStatus) 
     already made it into main via a squash/rebase merge elsewhere."""
     if branch == repo.default_branch or not gh.is_linked_worktree():
         return
-    ahead = gh.commits_ahead_of(f"origin/{repo.default_branch}")
+    origin_ref = f"origin/{repo.default_branch}"
+    ahead = gh.commits_ahead_of(origin_ref)
+    ref_label = origin_ref
     if ahead is None:
         ahead = gh.commits_ahead_of(repo.default_branch)
+        ref_label = f"local {repo.default_branch}"
     if ahead is None:
         return
     if ahead > 0:
-        note = _yellow(f"{ahead} commit{'s' if ahead != 1 else ''} not in {repo.default_branch}")
+        note = _yellow(f"{ahead} commit{'s' if ahead != 1 else ''} not in {ref_label}")
         print(f"worktree  {note}")
         return
 
-    print(f"worktree  {_dim(f'merged into {repo.default_branch}')}")
+    print(f"worktree  {_dim(f'merged into {ref_label}')}")
     # merged is not enough on its own — deleting a dirty worktree loses
     # uncommitted work regardless of what's already landed on main.
     if local.changed_files or local.untracked_count:
